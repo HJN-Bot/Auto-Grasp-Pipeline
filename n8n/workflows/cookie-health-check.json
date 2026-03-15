@@ -8,7 +8,9 @@
             {
               "field": "weeks",
               "weeksInterval": 1,
-              "triggerAtDay": [1],
+              "triggerAtDay": [
+                1
+              ],
               "triggerAtHour": 9,
               "triggerAtMinute": 0
             }
@@ -19,7 +21,10 @@
       "name": "每周一 09:00 检测",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
@@ -29,7 +34,10 @@
       "name": "Run check_cookies.py",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [500, 300]
+      "position": [
+        500,
+        300
+      ]
     },
     {
       "parameters": {
@@ -39,7 +47,10 @@
       "name": "解析结果",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [760, 300]
+      "position": [
+        760,
+        300
+      ]
     },
     {
       "parameters": {
@@ -56,7 +67,10 @@
       "name": "需要操作？",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [1020, 300]
+      "position": [
+        1020,
+        300
+      ]
     },
     {
       "parameters": {
@@ -66,7 +80,10 @@
       "name": "记录 OK 日志",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [1280, 180]
+      "position": [
+        1280,
+        180
+      ]
     },
     {
       "parameters": {
@@ -76,21 +93,67 @@
       "name": "输出告警",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [1280, 420]
+      "position": [
+        1280,
+        420
+      ]
     }
   ],
   "connections": {
-    "每周一 09:00 检测": { "main": [[{ "node": "Run check_cookies.py", "type": "main", "index": 0 }]] },
-    "Run check_cookies.py": { "main": [[{ "node": "解析结果", "type": "main", "index": 0 }]] },
-    "解析结果": { "main": [[{ "node": "需要操作？", "type": "main", "index": 0 }]] },
+    "每周一 09:00 检测": {
+      "main": [
+        [
+          {
+            "node": "Run check_cookies.py",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run check_cookies.py": {
+      "main": [
+        [
+          {
+            "node": "解析结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析结果": {
+      "main": [
+        [
+          {
+            "node": "需要操作？",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "需要操作？": {
       "main": [
-        [{ "node": "输出告警", "type": "main", "index": 0 }],
-        [{ "node": "记录 OK 日志", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "输出告警",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "记录 OK 日志",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
   "active": false,
   "settings": {},
-  "pinData": {}
+  "pinData": {},
+  "id": "ef5221e7-1d73-4686-8119-a9c865b3123c"
 }
