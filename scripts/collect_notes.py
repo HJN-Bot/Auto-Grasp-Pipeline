@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-import re, json, html, argparse, tempfile, subprocess
+import os, re, sys, json, html, argparse, tempfile, subprocess
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import requests
 
-VENV_PY = '/home/ubuntu/.openclaw/workspace/.venv_stt/bin/python'
+# --- 环境配置（通过 .env 或系统环境变量注入，不硬编码）---
+VENV_PY = os.environ.get('VENV_PYTHON', sys.executable)
+YOUTUBE_COOKIES = os.environ.get('YOUTUBE_COOKIES', '')  # cookies.txt 绝对路径
 
 ZH_HINTS = ['的','了','是','在','和','与','我们','你','他','她','它','这','那']
 
+
 def is_probably_chinese(s: str) -> bool:
     return any(ch in s for ch in ZH_HINTS) or bool(re.search(r'[\u4e00-\u9fff]', s))
+
 
 def video_id_from_url(url: str):
     if 'youtu.be/' in url:
@@ -20,29 +24,51 @@ def video_id_from_url(url: str):
     m = re.search(r'youtube\.com/shorts/([^?&/]+)', url)
     return m.group(1) if m else None
 
-def get_youtube_transcript(vid: str):
+
+def get_youtube_transcript(vid: str, cookies_file: str = ''):
+    """
+    用 youtube-transcript-api 拉字幕。
+    支持新版 (>=0.6, 实例化传 cookies) 和旧版 (类方法) 两种 API。
+    """
     code = f'''
-from youtube_transcript_api import YouTubeTranscriptApi
-import json
-vid={vid!r}
+import json, sys
+vid = {vid!r}
+cookies = {cookies_file!r}
+
 try:
-  data=YouTubeTranscriptApi.get_transcript(vid,languages=['en','zh-Hans','zh-CN'])
-  print(json.dumps({{'ok':True,'data':data}},ensure_ascii=False))
+    from youtube_transcript_api import YouTubeTranscriptApi
+    try:
+        # 新版 API (>=0.6): 实例化后调用，支持 cookies
+        kwargs = {{"cookies": cookies}} if cookies else {{}}
+        api = YouTubeTranscriptApi(**kwargs)
+        raw = api.get_transcript(vid, languages=["en", "zh-Hans", "zh-CN"])
+        # 统一转为 dict 列表
+        data = [dict(r) if hasattr(r, "items") else {{"text": r.text, "start": r.start, "duration": r.duration}} for r in raw]
+    except TypeError:
+        # 旧版 API (<0.6): 类方法，不支持 cookies
+        data = YouTubeTranscriptApi.get_transcript(vid, languages=["en", "zh-Hans", "zh-CN"])
+    print(json.dumps({{"ok": True, "data": data}}, ensure_ascii=False))
 except Exception as e:
-  print(json.dumps({{'ok':False,'err':type(e).__name__+': '+str(e)}},ensure_ascii=False))
+    print(json.dumps({{"ok": False, "err": type(e).__name__ + ": " + str(e)}}, ensure_ascii=False))
 '''
     p = subprocess.run([VENV_PY, '-c', code], capture_output=True, text=True)
     try:
         out = json.loads(p.stdout.strip().splitlines()[-1])
     except Exception:
-        return None, 'transcript_api_parse_failed'
+        return None, f'transcript_api_parse_failed | stderr: {p.stderr[-300:]}'
     if out.get('ok'):
         return out['data'], None
     return None, out.get('err')
 
-def yt_dlp_audio(url: str, out_wav: str):
+
+def yt_dlp_audio(url: str, out_wav: str, cookies_file: str = ''):
+    """下载最优音频并转换为 16kHz 单声道 WAV，供 Whisper 使用。"""
     with tempfile.TemporaryDirectory() as td:
-        cmd = ['yt-dlp', '-f', 'bestaudio', '--no-playlist', '-o', f'{td}/audio.%(ext)s', url]
+        cmd = ['yt-dlp', '-f', 'bestaudio', '--no-playlist']
+        if cookies_file and Path(cookies_file).is_file():
+            cmd += ['--cookies', cookies_file]
+        cmd += ['-o', f'{td}/audio.%(ext)s', url]
+
         p = subprocess.run(cmd, capture_output=True, text=True)
         if p.returncode != 0:
             return False, (p.stderr or p.stdout)[-700:]
@@ -50,21 +76,25 @@ def yt_dlp_audio(url: str, out_wav: str):
         if not files:
             return False, 'audio_not_downloaded'
         src = str(files[0])
-        f = subprocess.run(['ffmpeg','-y','-i',src,'-vn','-ac','1','-ar','16000',out_wav], capture_output=True, text=True)
+        f = subprocess.run(
+            ['ffmpeg', '-y', '-i', src, '-vn', '-ac', '1', '-ar', '16000', out_wav],
+            capture_output=True, text=True
+        )
         if f.returncode != 0:
             return False, (f.stderr or f.stdout)[-700:]
     return True, None
+
 
 def whisper_transcribe(wav_path: str):
     code = f'''
 from faster_whisper import WhisperModel
 import json
-model=WhisperModel('small',device='cpu',compute_type='int8')
-segments,info=model.transcribe({wav_path!r}, vad_filter=True)
-out=[]
+model = WhisperModel("small", device="cpu", compute_type="int8")
+segments, info = model.transcribe({wav_path!r}, vad_filter=True)
+out = []
 for s in segments:
-  out.append({{'start':s.start,'end':s.end,'text':s.text.strip()}})
-print(json.dumps({{'ok':True,'language':info.language,'segments':out}},ensure_ascii=False))
+    out.append({{"start": s.start, "end": s.end, "text": s.text.strip()}})
+print(json.dumps({{"ok": True, "language": info.language, "segments": out}}, ensure_ascii=False))
 '''
     p = subprocess.run([VENV_PY, '-c', code], capture_output=True, text=True)
     try:
@@ -73,43 +103,48 @@ print(json.dumps({{'ok':True,'language':info.language,'segments':out}},ensure_as
         return None, 'whisper_parse_failed'
     return out, None
 
+
 def fetch_meta(url: str):
     try:
-        r = requests.get(url, timeout=20, headers={'User-Agent':'Mozilla/5.0'})
+        r = requests.get(url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
         text = r.text
     except Exception as e:
         return {'error': str(e)}
     title = ''
-    m = re.search(r'<title[^>]*>(.*?)</title>', text, re.I|re.S)
-    if m: title = html.unescape(re.sub(r'\s+',' ',m.group(1)).strip())
+    m = re.search(r'<title[^>]*>(.*?)</title>', text, re.I | re.S)
+    if m:
+        title = html.unescape(re.sub(r'\s+', ' ', m.group(1)).strip())
     desc = ''
-    for pat in [r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']', r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']']:
-        m = re.search(pat, text, re.I|re.S)
+    for pat in [
+        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
+        r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
+    ]:
+        m = re.search(pat, text, re.I | re.S)
         if m:
-            desc = html.unescape(re.sub(r'\s+',' ',m.group(1)).strip())
+            desc = html.unescape(re.sub(r'\s+', ' ', m.group(1)).strip())
             break
     return {'title': title, 'desc': desc}
 
+
 def x_oembed(url: str):
-    api='https://publish.twitter.com/oembed'
+    api = 'https://publish.twitter.com/oembed'
     try:
-        r=requests.get(api, params={'url':url}, timeout=20)
-        if r.status_code==200:
-            j=r.json()
-            h=j.get('html','')
-            text=re.sub('<[^<]+?>',' ',h)
-            text=re.sub(r'\s+',' ',html.unescape(text)).strip()
-            return {'ok':True,'text':text}
-        return {'ok':False,'error':f'HTTP {r.status_code}'}
+        r = requests.get(api, params={'url': url}, timeout=20)
+        if r.status_code == 200:
+            j = r.json()
+            h = j.get('html', '')
+            text = re.sub('<[^<]+?>', ' ', h)
+            text = re.sub(r'\s+', ' ', html.unescape(text)).strip()
+            return {'ok': True, 'text': text}
+        return {'ok': False, 'error': f'HTTP {r.status_code}'}
     except Exception as e:
-        return {'ok':False,'error':str(e)}
+        return {'ok': False, 'error': str(e)}
+
 
 def summarize_structured(source, text):
     text = (text or '').strip()
     if not text:
-        return {
-            'core_claim':'', 'support_points':[], 'quote_zh':'', 'quote_en':'', 'tags':[]
-        }
+        return {'core_claim': '', 'support_points': [], 'quote_zh': '', 'quote_en': '', 'tags': []}
     lines = [x.strip() for x in re.split(r'[\n。!?！？]+', text) if x.strip()]
     core = lines[0] if lines else text[:80]
     supports = []
@@ -128,124 +163,136 @@ def summarize_structured(source, text):
     tags = []
     host = urlparse(source).netloc.lower()
     if 'youtube' in host or 'youtu.be' in host:
-        tags += ['YouTube','视频笔记']
+        tags += ['YouTube', '视频笔记']
     elif 'xiaohongshu' in host or 'xhslink' in host:
-        tags += ['小红书','内容拆解']
+        tags += ['小红书', '内容拆解']
     elif 'weixin' in host or 'wemp.app' in host:
-        tags += ['公众号','长文提炼']
+        tags += ['公众号', '长文提炼']
     elif 'twitter' in host or 'x.com' in host:
-        tags += ['X','推文拆解']
-    tags = tags[:3]
+        tags += ['X', '推文拆解']
     return {
         'core_claim': core[:120],
         'support_points': [s[:140] for s in supports],
         'quote_zh': quote_zh,
         'quote_en': quote_en,
-        'tags': tags,
+        'tags': tags[:3],
     }
+
 
 def assess_quality(item, min_chars=300):
     chars = len((item.get('body') or '').strip())
-    title_ok = bool((item.get('title') or '').strip())
-    enough = chars >= min_chars
     return {
         'chars': chars,
-        'title_ok': title_ok,
-        'enough': enough,
+        'title_ok': bool((item.get('title') or '').strip()),
+        'enough': chars >= min_chars,
     }
 
-def main():
-    ap=argparse.ArgumentParser()
-    ap.add_argument('links', nargs='+')
-    ap.add_argument('--out', default='/home/ubuntu/.openclaw/workspace/agents/lulu/deliverables/notes/collected_notes.md')
-    ap.add_argument('--min-chars', type=int, default=300)
-    args=ap.parse_args()
 
-    outp=Path(args.out)
+def main():
+    ap = argparse.ArgumentParser()
+    # 安全入参：通过 JSON 文件传递链接，避免 shell 命令注入
+    ap.add_argument('--links-file', help='包含 {"links":[...]} 的 JSON 文件路径（推荐）')
+    # 保留位置参数作为兼容，仅供命令行直接调用时使用
+    ap.add_argument('links', nargs='*')
+    ap.add_argument('--out', default=str(Path.home() / 'collected_notes.md'))
+    ap.add_argument('--min-chars', type=int, default=300)
+    ap.add_argument('--cookies', default=YOUTUBE_COOKIES, help='YouTube cookies.txt 路径')
+    args = ap.parse_args()
+
+    # 读取链接：优先 --links-file，其次位置参数
+    if args.links_file:
+        payload = json.loads(Path(args.links_file).read_text(encoding='utf-8'))
+        links = payload.get('links', [])
+    else:
+        links = args.links
+
+    if not links:
+        print('ERROR: 未提供任何链接', file=sys.stderr)
+        sys.exit(1)
+
+    cookies_file = args.cookies
+    outp = Path(args.out)
     outp.parent.mkdir(parents=True, exist_ok=True)
 
-    records=[]
-    for u in args.links:
-        host=urlparse(u).netloc.lower()
-        rec={'url':u,'platform':'web','title':'','body':'','method':'','errors':[]}
+    records = []
+    for u in links:
+        host = urlparse(u).netloc.lower()
+        rec = {'url': u, 'platform': 'web', 'title': '', 'body': '', 'method': '', 'errors': []}
 
         if 'youtu' in host:
-            rec['platform']='youtube'
-            vid=video_id_from_url(u)
-            rec['title']=f'YouTube video {vid or ""}'.strip()
-            tr, err = get_youtube_transcript(vid) if vid else (None,'video_id_missing')
+            rec['platform'] = 'youtube'
+            vid = video_id_from_url(u)
+            rec['title'] = f'YouTube video {vid or ""}'.strip()
+            tr, err = get_youtube_transcript(vid, cookies_file) if vid else (None, 'video_id_missing')
             if tr:
-                txt=' '.join([x.get('text','') for x in tr])
-                rec['body']=txt
-                rec['method']='transcript_api'
+                rec['body'] = ' '.join([x.get('text', '') for x in tr])
+                rec['method'] = 'transcript_api'
             else:
                 rec['errors'].append(f'transcript_api_fail: {err}')
-                wav='/tmp/yt_fallback.wav'
-                ok,e=yt_dlp_audio(u,wav)
+                wav = '/tmp/yt_fallback.wav'
+                ok, e = yt_dlp_audio(u, wav, cookies_file)
                 if ok:
-                    wh,e2=whisper_transcribe(wav)
+                    wh, e2 = whisper_transcribe(wav)
                     if wh and wh.get('ok'):
-                        segs=wh.get('segments',[])
-                        rec['body']=' '.join([s.get('text','') for s in segs])
-                        rec['method']='yt-dlp+whisper'
+                        rec['body'] = ' '.join([s.get('text', '') for s in wh.get('segments', [])])
+                        rec['method'] = 'yt-dlp+whisper'
                     else:
                         rec['errors'].append(f'whisper_fail: {e2}')
                 else:
                     rec['errors'].append(f'yt-dlp_fail: {e}')
 
         elif 'x.com' in host or 'twitter.com' in host:
-            rec['platform']='x'
-            o=x_oembed(u)
+            rec['platform'] = 'x'
+            o = x_oembed(u)
             if o.get('ok'):
-                rec['body']=o.get('text','')
-                rec['method']='oembed'
-                rec['title']=(rec['body'][:70] + '...') if len(rec['body'])>70 else rec['body']
+                rec['body'] = o.get('text', '')
+                rec['method'] = 'oembed'
+                rec['title'] = (rec['body'][:70] + '...') if len(rec['body']) > 70 else rec['body']
             else:
                 rec['errors'].append(f"oembed_fail: {o.get('error')}")
 
         else:
-            meta=fetch_meta(u)
-            rec['platform']='web'
+            meta = fetch_meta(u)
+            rec['platform'] = 'web'
             if 'error' in meta:
                 rec['errors'].append(f"fetch_fail: {meta['error']}")
             else:
-                rec['title']=meta.get('title','')
-                rec['body']=meta.get('desc','')
-                rec['method']='web_meta'
+                rec['title'] = meta.get('title', '')
+                rec['body'] = meta.get('desc', '')
+                rec['method'] = 'web_meta'
 
-        rec['quality']=assess_quality(rec, args.min_chars)
-        rec['outline']=summarize_structured(u, rec.get('body',''))
+        rec['quality'] = assess_quality(rec, args.min_chars)
+        rec['outline'] = summarize_structured(u, rec.get('body', ''))
         records.append(rec)
 
-    need_materials=[]
-    outlines=[]
+    need_materials = []
+    outlines = []
     for r in records:
-        q=r['quality']
+        q = r['quality']
         if q['enough']:
             outlines.append(r)
         else:
-            missing=[]
-            if not r.get('body','').strip():
+            missing = []
+            if not r.get('body', '').strip():
                 missing.append('正文内容')
             elif q['chars'] < args.min_chars:
                 missing.append(f'正文不足{args.min_chars}字（当前{q["chars"]}）')
-            provide='复制正文 OR 截图'
+            provide = '复制正文 OR 截图'
             if r['platform'] == 'youtube':
-                provide='导出音频文件 OR 视频文件 OR 提供可访问字幕'
+                provide = '导出音频文件 OR 视频文件 OR 提供可访问字幕'
             need_materials.append({
                 'source': r['url'],
-                'got': f"标题「{r.get('title','(无)')}」",
+                'got': f"标题「{r.get('title', '(无)')}」",
                 'missing': '；'.join(missing) if missing else '正文内容',
                 'provide': provide,
             })
 
-    lines=['# Collected Notes (auto)', '']
+    lines = ['# Collected Notes (auto)', '']
     lines.append('## 抓取结果概览')
     for r in records:
-      lines.append(f"- {r['platform']} | method={r.get('method','(none)')} | chars={r['quality']['chars']} | url={r['url']}")
-      if r['errors']:
-          for e in r['errors']:
-              lines.append(f"  - warn: {e}")
+        lines.append(f"- {r['platform']} | method={r.get('method', '(none)')} | chars={r['quality']['chars']} | url={r['url']}")
+        for e in r.get('errors', []):
+            lines.append(f'  - warn: {e}')
     lines.append('')
 
     if need_materials:
@@ -260,15 +307,12 @@ def main():
     if outlines:
         lines.append('## 笔记大纲（中英双语结构）')
         for r in outlines:
-            o=r['outline']
+            o = r['outline']
             lines.append(f"### 来源：{r['url']}")
             lines.append(f"核心主张（1句话）：{o['core_claim'] or '（待补料）'}")
             lines.append('支撑论点（3条以内）：')
-            if o['support_points']:
-                for p in o['support_points'][:3]:
-                    lines.append(f"- {p}")
-            else:
-                lines.append('- （待补料）')
+            for p in (o['support_points'] or ['（待补料）'])[:3]:
+                lines.append(f'- {p}')
             lines.append(f"金句/可引用表达（中文1条）：{o['quote_zh'] or '（待补料）'}")
             lines.append(f"金句/可引用表达（英文1条）：{o['quote_en'] or '（待补料）'}")
             lines.append(f"适合发布的标签（3个）：{', '.join(o['tags'][:3]) if o['tags'] else '（待补料）'}")
@@ -277,5 +321,6 @@ def main():
     outp.write_text('\n'.join(lines), encoding='utf-8')
     print(str(outp))
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     main()

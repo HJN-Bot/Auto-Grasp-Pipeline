@@ -1,0 +1,96 @@
+{
+  "name": "youtube-cookie-health-check",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [1],
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "Cron_1",
+      "name": "每周一 09:00 检测",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "python3 \"$COLLECT_NOTES_SCRIPT/../check_cookies.py\"; echo \"exit:$?\""
+      },
+      "id": "Exec_Check",
+      "name": "Run check_cookies.py",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const stdout = $json.stdout || '';\nconst exitLine = stdout.split('\\n').find(l => l.startsWith('exit:')) || 'exit:0';\nconst exitCode = parseInt(exitLine.replace('exit:',''));\n\nlet status = 'ok';\nlet needAction = false;\nif (exitCode === 2) { status = 'EXPIRED - 立即重新导出 cookies！'; needAction = true; }\nelse if (exitCode === 1) { status = 'EXPIRING_SOON - 本周内请刷新 cookies'; needAction = true; }\nelse if (exitCode === 3) { status = 'ERROR - cookies 文件异常'; needAction = true; }\n\nreturn [{ json: { status, needAction, exitCode, detail: stdout.slice(0, 800) } }];"
+      },
+      "id": "Function_Parse",
+      "name": "解析结果",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.needAction}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "IF_NeedAction",
+      "name": "需要操作？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1020, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Cookie 正常，记录日志即可\nconsole.log('[Cookie Check] Status OK:', $json.detail);\nreturn [{ json: { result: 'ok', message: 'Cookie 健康，无需操作' } }];"
+      },
+      "id": "Function_OK",
+      "name": "记录 OK 日志",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1280, 180]
+    },
+    {
+      "parameters": {
+        "functionCode": "// TODO: 接入你的通知渠道（企微、飞书、邮件等）\n// 这里先输出告警信息，供 n8n 日志查看\nconsole.error('[Cookie ALERT]', $json.status);\nconsole.error('[Cookie ALERT Detail]', $json.detail);\nreturn [{ json: { alert: true, status: $json.status, action: '请重新从浏览器导出 cookies.txt 并替换 ~/.config/auto-grasp/youtube_cookies.txt' } }];"
+      },
+      "id": "Function_Alert",
+      "name": "输出告警",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1280, 420]
+    }
+  ],
+  "connections": {
+    "每周一 09:00 检测": { "main": [[{ "node": "Run check_cookies.py", "type": "main", "index": 0 }]] },
+    "Run check_cookies.py": { "main": [[{ "node": "解析结果", "type": "main", "index": 0 }]] },
+    "解析结果": { "main": [[{ "node": "需要操作？", "type": "main", "index": 0 }]] },
+    "需要操作？": {
+      "main": [
+        [{ "node": "输出告警", "type": "main", "index": 0 }],
+        [{ "node": "记录 OK 日志", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}

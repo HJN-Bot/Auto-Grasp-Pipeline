@@ -1,0 +1,20 @@
+# Cookie 文件（绝对不能提交）
+*.txt
+cookies/
+*_cookies*
+
+# 环境变量
+.env
+
+# 运行产物
+*.md.bak
+notes-output/
+/tmp/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store

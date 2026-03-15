@@ -16,7 +16,7 @@
     },
     {
       "parameters": {
-        "functionCode": "const body = $json.body || $json;\nconst links = body.links || [];\nif (!Array.isArray(links) || !links.length) throw new Error('links is required');\nreturn [{ json: { links, language: body.language || 'zh+en' } }];"
+        "functionCode": "const body = $json.body || $json;\nconst links = body.links || [];\nif (!Array.isArray(links) || !links.length) throw new Error('links is required');\nconst language = body.language || 'zh+en';\nreturn [{ json: { links, language } }];"
       },
       "id": "Function_Validate",
       "name": "Validate Input",
@@ -26,13 +26,23 @@
     },
     {
       "parameters": {
-        "command": "python3 {{$env.COLLECT_NOTES_SCRIPT}} {{$json.links.join(' ')}} --out {{$env.NOTES_OUT_DIR}}/notes_{{$now}}.md"
+        "functionCode": "// 将 links 写入临时 JSON 文件，避免将用户输入拼接进 shell 命令（防注入）\nconst fs = require('fs');\nconst path = require('path');\n\nconst links = $json.links;\nconst language = $json.language;\nconst tmpFile = path.join('/tmp', `harvest_${Date.now()}.json`);\n\nfs.writeFileSync(tmpFile, JSON.stringify({ links, language }), 'utf8');\n\nreturn [{ json: { tmpFile, language } }];"
+      },
+      "id": "Function_WriteLinks",
+      "name": "Write Links File",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "command": "python3 \"$COLLECT_NOTES_SCRIPT\" --links-file \"{{$json.tmpFile}}\" --out \"$NOTES_OUT_DIR/notes_$(date +%Y%m%d_%H%M%S).md\""
       },
       "id": "Exec_Collect",
       "name": "Run collect_notes.py",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [760, 300]
+      "position": [980, 300]
     },
     {
       "parameters": {
@@ -42,13 +52,14 @@
       "name": "Response",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [1020, 300]
+      "position": [1240, 300]
     }
   ],
   "connections": {
-    "Webhook": { "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]] },
-    "Validate Input": { "main": [[{ "node": "Run collect_notes.py", "type": "main", "index": 0 }]] },
-    "Run collect_notes.py": { "main": [[{ "node": "Response", "type": "main", "index": 0 }]] }
+    "Webhook":           { "main": [[{ "node": "Validate Input",    "type": "main", "index": 0 }]] },
+    "Validate Input":    { "main": [[{ "node": "Write Links File",  "type": "main", "index": 0 }]] },
+    "Write Links File":  { "main": [[{ "node": "Run collect_notes.py", "type": "main", "index": 0 }]] },
+    "Run collect_notes.py": { "main": [[{ "node": "Response",      "type": "main", "index": 0 }]] }
   },
   "active": false,
   "settings": {},
