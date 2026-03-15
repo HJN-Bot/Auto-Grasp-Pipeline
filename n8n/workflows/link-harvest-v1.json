@@ -16,87 +16,57 @@
     },
     {
       "parameters": {
-        "functionCode": "const body = $json.body || $json;\nconst links = body.links || [];\nif (!Array.isArray(links) || !links.length) throw new Error('links is required');\nconst language = body.language || 'zh+en';\nconst raw_text = body.raw_text || '';\nreturn [{ json: { links, language, raw_text } }];"
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst links = body.links || [];\nif (!Array.isArray(links) || !links.length) throw new Error('links is required');\nconst language = body.language || 'zh+en';\nconst raw_text = body.raw_text || '';\nreturn [{ json: { links, language, raw_text } }];"
       },
-      "id": "Function_Validate",
+      "id": "Code_Validate",
       "name": "Validate Input",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [480, 300]
     },
     {
       "parameters": {
         "conditions": {
-          "string": [
+          "options": { "caseSensitive": true },
+          "conditions": [
             {
-              "value1": "={{$json.raw_text}}",
-              "operation": "isNotEmpty"
+              "id": "raw_text_check",
+              "leftValue": "={{ $json.raw_text }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
             }
-          ]
+          ],
+          "combinator": "and"
         }
       },
       "id": "IF_RawText",
       "name": "有 raw_text？",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [720, 300]
     },
     {
       "parameters": {
-        "functionCode": "// raw_text 旁路：跳过抓取，直接按 openclaw handoff 格式构建\nconst links = $json.links || [];\nconst raw_text = $json.raw_text || '';\nconst url = links[0] || '';\nconst run_id = 'n8n-' + new Date().toISOString().slice(0,10) + '-' + Date.now().toString().slice(-4);\n\nlet source_type = 'web';\ntry {\n  const host = new URL(url).hostname.toLowerCase();\n  if (host.includes('youtu')) source_type = 'youtube';\n  else if (host.includes('x.com') || host.includes('twitter')) source_type = 'x';\n  else if (host.includes('xiaohongshu') || host.includes('xhslink')) source_type = 'xhs';\n  else if (host.includes('weixin') || host.includes('wemp')) source_type = 'wechat';\n} catch(e) {}\n\nconst item = {\n  source_type,\n  source_url: url,\n  title: `${source_type} (本地转录注入)`,\n  transcript: raw_text,\n  language: $json.language || 'zh+en',\n  meta: { chars: raw_text.length, method: 'manual_inject' }\n};\n\nreturn [{ json: {\n  ok: true,\n  run_id,\n  items: [item],\n  need_materials: raw_text.length < 300 ? [{ source_url: url, missing: '正文不足300字' }] : [],\n} }];"
+        "language": "javaScript",
+        "jsCode": "// raw_text 旁路：跳过抓取，直接按 openclaw handoff 格式构建\nconst links = $input.first().json.links || [];\nconst raw_text = $input.first().json.raw_text || '';\nconst url = links[0] || '';\nconst run_id = 'n8n-' + new Date().toISOString().slice(0,10) + '-' + Date.now().toString().slice(-4);\n\nlet source_type = 'web';\ntry {\n  const host = new URL(url).hostname.toLowerCase();\n  if (host.includes('youtu')) source_type = 'youtube';\n  else if (host.includes('x.com') || host.includes('twitter')) source_type = 'x';\n  else if (host.includes('xiaohongshu') || host.includes('xhslink')) source_type = 'xhs';\n  else if (host.includes('weixin') || host.includes('wemp')) source_type = 'wechat';\n} catch(e) {}\n\nconst item = {\n  source_type,\n  source_url: url,\n  title: `${source_type} (本地转录注入)`,\n  transcript: raw_text,\n  language: $input.first().json.language || 'zh+en',\n  meta: { chars: raw_text.length, method: 'manual_inject' }\n};\n\nreturn [{ json: {\n  ok: true,\n  run_id,\n  items: [item],\n  need_materials: raw_text.length < 300 ? [{ source_url: url, missing: '正文不足300字' }] : []\n} }];"
       },
-      "id": "Function_RawTextBypass",
+      "id": "Code_RawTextBypass",
       "name": "Build from Raw Text",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [960, 160]
     },
     {
       "parameters": {
-        "functionCode": "const fs = require('fs');\nconst path = require('path');\nconst links = $json.links;\nconst language = $json.language;\nconst tmpFile = path.join('/tmp', `harvest_${Date.now()}.json`);\nfs.writeFileSync(tmpFile, JSON.stringify({ links, language }), 'utf8');\nreturn [{ json: { tmpFile, language } }];"
+        "language": "javaScript",
+        "jsCode": "// 写临时文件 + 调 Python 脚本 + 解析输出，合并为一个节点\nconst { spawnSync } = require('child_process');\nconst fs = require('fs');\nconst path = require('path');\n\nconst links    = $input.first().json.links;\nconst language = $input.first().json.language;\nconst python   = process.env.VENV_PYTHON || 'python3';\nconst script   = process.env.COLLECT_NOTES_SCRIPT || '';\n\nif (!script) throw new Error('COLLECT_NOTES_SCRIPT env var not set');\n\n// 写临时 JSON 文件（防命令注入）\nconst tmpFile = path.join('/tmp', `harvest_${Date.now()}.json`);\nfs.writeFileSync(tmpFile, JSON.stringify({ links, language }), 'utf8');\n\n// 运行脚本\nconst result = spawnSync(\n  python,\n  [script, '--links-file', tmpFile, '--format', 'json'],\n  { timeout: 120000, env: { ...process.env } }\n);\n\ntry { fs.unlinkSync(tmpFile); } catch(e) {}\n\nif (result.status !== 0) {\n  const err = result.stderr?.toString() || result.stdout?.toString() || 'unknown error';\n  throw new Error('Script failed: ' + err.slice(-500));\n}\n\n// 解析输出\nconst stdout = (result.stdout?.toString() || '').trim();\nconst lines  = stdout.split('\\n').filter(l => l.trim());\nlet parsed;\ntry { parsed = JSON.parse(lines[lines.length - 1]); }\ncatch(e) { throw new Error('Parse failed: ' + stdout.slice(-300)); }\n\nif (!parsed.ok) throw new Error('Script error: ' + JSON.stringify(parsed));\n\n// 转换为 openclaw handoff 协议格式\nconst run_id = 'n8n-' + new Date().toISOString().slice(0,10) + '-' + Date.now().toString().slice(-4);\n\nconst items = (parsed.records || []).map(r => ({\n  source_type: r.platform === 'xiaohongshu' ? 'xhs' : r.platform,\n  source_url:  r.url,\n  title:       r.title || '',\n  transcript:  r.body  || '',\n  language:    'zh+en',\n  meta: { chars: (r.quality||{}).chars || 0, method: r.method || '' }\n})).filter(i => i.transcript);\n\nconst need_materials = (parsed.need_materials || []).map(m => ({\n  source_url: m.source || '',\n  got:        m.got    || '',\n  missing:    m.missing || '',\n  provide:    m.provide || ''\n}));\n\nreturn [{ json: { ok: true, run_id, items, need_materials } }];"
       },
-      "id": "Function_WriteLinks",
-      "name": "Write Links File",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [960, 440]
-    },
-    {
-      "parameters": {
-        "command": "\"$VENV_PYTHON\" \"$COLLECT_NOTES_SCRIPT\" --links-file \"{{$json.tmpFile}}\" --format json"
-      },
-      "id": "Exec_Collect",
+      "id": "Code_Collect",
       "name": "Run collect_notes.py",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [1200, 440]
-    },
-    {
-      "parameters": {
-        "functionCode": "const stdout = ($json.stdout || '').trim();\nlet parsed;\ntry {\n  const lastLine = stdout.split('\\n').filter(l => l.trim()).pop() || '{}';\n  parsed = JSON.parse(lastLine);\n} catch(e) {\n  throw new Error('Script output parse failed: ' + stdout.slice(0, 300));\n}\nif (!parsed.ok) throw new Error('Script error: ' + JSON.stringify(parsed));\n\n// 转换为 openclaw handoff 协议格式\nconst run_id = 'n8n-' + new Date().toISOString().slice(0,10) + '-' + Date.now().toString().slice(-4);\nconst items = (parsed.records || []).map(r => ({\n  source_type: r.platform === 'x' ? 'x' : r.platform === 'xiaohongshu' ? 'xhs' : r.platform,\n  source_url: r.url,\n  title: r.title || '',\n  transcript: r.body || '',\n  language: 'zh+en',\n  meta: { chars: (r.quality||{}).chars || 0, method: r.method || '' }\n})).filter(i => i.transcript);\n\nconst need_materials = (parsed.need_materials || []).map(m => ({\n  source_url: m.source || '',\n  got: m.got || '',\n  missing: m.missing || '',\n  provide: m.provide || ''\n}));\n\nreturn [{ json: { ok: true, run_id, items, need_materials } }];"
-      },
-      "id": "Function_ParseOutput",
-      "name": "Parse Output",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [1440, 440]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "boolean": [
-            {
-              "value1": true,
-              "value2": true
-            }
-          ]
-        }
-      },
-      "id": "IF_Openclaw",
-      "name": "Openclaw 已配置？",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [1680, 300]
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 440]
     },
     {
       "parameters": {
@@ -110,46 +80,41 @@
           ]
         },
         "sendBody": true,
-        "bodyContentType": "json",
-        "jsonBody": "={\n  \"ok\": {{$json.ok}},\n  \"run_id\": {{JSON.stringify($json.run_id)}},\n  \"items\": {{JSON.stringify($json.items)}},\n  \"need_materials\": {{JSON.stringify($json.need_materials)}}\n}",
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ ok: $json.ok, run_id: $json.run_id, items: $json.items, need_materials: $json.need_materials }) }}",
         "options": { "timeout": 30000 }
       },
       "id": "HTTP_Openclaw",
       "name": "Forward to Openclaw",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 3,
-      "position": [1920, 160]
+      "typeVersion": 4,
+      "position": [1240, 300]
     },
     {
       "parameters": {
-        "functionCode": "return [{ json: { ok: $json.ok, run_id: $json.run_id, items: $json.items, need_materials: $json.need_materials } }];"
+        "language": "javaScript",
+        "jsCode": "return [{ json: { ok: $input.first().json.ok, run_id: $input.first().json.run_id, items: $input.first().json.items, need_materials: $input.first().json.need_materials } }];"
       },
-      "id": "Function_Response",
+      "id": "Code_Response",
       "name": "Response",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [1920, 440]
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 300]
     }
   ],
   "connections": {
-    "Webhook":           { "main": [[{ "node": "Validate Input",    "type": "main", "index": 0 }]] },
-    "Validate Input":    { "main": [[{ "node": "有 raw_text？",     "type": "main", "index": 0 }]] },
+    "Webhook":             { "main": [[{ "node": "Validate Input",      "type": "main", "index": 0 }]] },
+    "Validate Input":      { "main": [[{ "node": "有 raw_text？",       "type": "main", "index": 0 }]] },
     "有 raw_text？": {
       "main": [
-        [{ "node": "Build from Raw Text",    "type": "main", "index": 0 }],
-        [{ "node": "Write Links File",       "type": "main", "index": 0 }]
+        [{ "node": "Build from Raw Text",  "type": "main", "index": 0 }],
+        [{ "node": "Run collect_notes.py", "type": "main", "index": 0 }]
       ]
     },
-    "Build from Raw Text":  { "main": [[{ "node": "Openclaw 已配置？",    "type": "main", "index": 0 }]] },
-    "Write Links File":     { "main": [[{ "node": "Run collect_notes.py", "type": "main", "index": 0 }]] },
-    "Run collect_notes.py": { "main": [[{ "node": "Parse Output",         "type": "main", "index": 0 }]] },
-    "Parse Output":         { "main": [[{ "node": "Openclaw 已配置？",    "type": "main", "index": 0 }]] },
-    "Openclaw 已配置？": {
-      "main": [
-        [{ "node": "Forward to Openclaw", "type": "main", "index": 0 }],
-        [{ "node": "Response",            "type": "main", "index": 0 }]
-      ]
-    }
+    "Build from Raw Text":  { "main": [[{ "node": "Forward to Openclaw", "type": "main", "index": 0 }]] },
+    "Run collect_notes.py": { "main": [[{ "node": "Forward to Openclaw", "type": "main", "index": 0 }]] },
+    "Forward to Openclaw":  { "main": [[{ "node": "Response",            "type": "main", "index": 0 }]] }
   },
   "active": false,
   "settings": {},
