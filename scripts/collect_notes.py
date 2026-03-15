@@ -197,6 +197,8 @@ def main():
     ap.add_argument('--out', default=str(Path.home() / 'collected_notes.md'))
     ap.add_argument('--min-chars', type=int, default=300)
     ap.add_argument('--cookies', default=YOUTUBE_COOKIES, help='YouTube cookies.txt 路径')
+    ap.add_argument('--format', choices=['md', 'json'], default='md',
+                    help='md=写入文件; json=输出 JSON 到 stdout（供 n8n 直接解析）')
     args = ap.parse_args()
 
     # 读取链接：优先 --links-file，其次位置参数
@@ -318,8 +320,24 @@ def main():
             lines.append(f"适合发布的标签（3个）：{', '.join(o['tags'][:3]) if o['tags'] else '（待补料）'}")
             lines.append('')
 
-    outp.write_text('\n'.join(lines), encoding='utf-8')
-    print(str(outp))
+    if args.format == 'json':
+        # JSON 模式：直接输出结构化数据到 stdout，供 n8n 解析后传给 Dify
+        combined_text = '\n\n'.join(
+            f"[{r['platform']}] {r.get('title', '')}\n{r.get('body', '')}"
+            for r in records if r.get('body', '').strip()
+        )
+        print(json.dumps({
+            'ok': True,
+            'records': records,
+            'outlines': outlines,
+            'need_materials': need_materials,
+            'combined_text': combined_text,
+            'platforms': list({r['platform'] for r in records}),
+        }, ensure_ascii=False))
+    else:
+        # MD 模式：写入 markdown 文件，打印文件路径
+        outp.write_text('\n'.join(lines), encoding='utf-8')
+        print(str(outp))
 
 
 if __name__ == '__main__':

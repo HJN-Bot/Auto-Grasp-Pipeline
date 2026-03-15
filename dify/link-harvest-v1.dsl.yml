@@ -1,49 +1,305 @@
 app:
   name: link-harvest-v1
   mode: workflow
-  description: 多来源链接转结构化中英笔记大纲
+  description: |
+    独立完整流程：输入链接列表 → 自动抓取内容 → LLM 提炼 → 输出结构化中英双语笔记大纲
+    支持：YouTube / X(Twitter) / 小红书 / 公众号
+    不依赖 n8n，可单独部署运行。
 version: 0.1.0
+
 workflow:
   inputs:
     - name: links
       type: array[string]
       required: true
+      label: 链接列表（支持 YouTube / Twitter / 小红书 / 公众号）
     - name: language
       type: string
       required: false
       default: zh+en
+      label: 输出语言
+    - name: youtube_cookies_path
+      type: string
+      required: false
+      default: ""
+      label: YouTube cookies.txt 路径（本地部署时填写，提升抓取成功率）
+
   nodes:
     - id: start
       type: start
       data: {}
-    - id: summarize
+
+    # ── Step 1: 逐链接抓取内容（Python Code 节点）──────────────────────────────
+    - id: fetch_content
+      type: code
+      data:
+        title: 抓取各平台内容
+        code_language: python3
+        code: |
+          import re, json, html, urllib.request, urllib.parse, xml.etree.ElementTree as ET
+          from urllib.parse import urlparse, parse_qs
+
+          def video_id(url):
+              if 'youtu.be/' in url:
+                  return url.split('youtu.be/')[-1].split('?')[0]
+              q = parse_qs(urlparse(url).query)
+              if 'v' in q: return q['v'][0]
+              m = re.search(r'youtube\.com/shorts/([^?&/]+)', url)
+              return m.group(1) if m else None
+
+          def fetch_yt_transcript(vid, cookies_path=''):
+              # 方法1：尝试 youtube-transcript-api（若 Dify 沙箱内可用）
+              try:
+                  from youtube_transcript_api import YouTubeTranscriptApi
+                  kwargs = {'cookies': cookies_path} if cookies_path else {}
+                  try:
+                      api = YouTubeTranscriptApi(**kwargs)
+                      data = api.get_transcript(vid, languages=['en','zh-Hans','zh-CN'])
+                  except TypeError:
+                      data = YouTubeTranscriptApi.get_transcript(vid, languages=['en','zh-Hans','zh-CN'])
+                  return ' '.join(x.get('text','') for x in data), 'transcript_api'
+              except Exception:
+                  pass
+              # 方法2：直接 HTTP 请求 YouTube timedtext 端点
+              try:
+                  for lang in ['en', 'zh-Hans', 'zh']:
+                      url = f'https://www.youtube.com/api/timedtext?v={vid}&lang={lang}&fmt=srv3'
+                      req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                      with urllib.request.urlopen(req, timeout=10) as r:
+                          raw = r.read().decode('utf-8', errors='ignore')
+                      if not raw.strip(): continue
+                      try:
+                          root = ET.fromstring(raw)
+                          texts = [t.text or '' for t in root.iter('s')]
+                          if texts: return ' '.join(texts), 'timedtext_api'
+                      except ET.ParseError:
+                          pass
+              except Exception:
+                  pass
+              return '', 'failed'
+
+          def fetch_meta(url):
+              try:
+                  req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                  with urllib.request.urlopen(req, timeout=15) as r:
+                      text = r.read().decode('utf-8', errors='ignore')
+                  title = ''
+                  m = re.search(r'<title[^>]*>(.*?)</title>', text, re.I|re.S)
+                  if m: title = html.unescape(re.sub(r'\s+',' ', m.group(1)).strip())
+                  desc = ''
+                  for pat in [
+                      r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
+                      r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
+                  ]:
+                      m = re.search(pat, text, re.I|re.S)
+                      if m:
+                          desc = html.unescape(re.sub(r'\s+',' ', m.group(1)).strip())
+                          break
+                  return title, desc
+              except Exception as e:
+                  return '', ''
+
+          def fetch_twitter(url):
+              try:
+                  api = 'https://publish.twitter.com/oembed'
+                  params = urllib.parse.urlencode({'url': url})
+                  req = urllib.request.Request(f'{api}?{params}', headers={'User-Agent': 'Mozilla/5.0'})
+                  with urllib.request.urlopen(req, timeout=10) as r:
+                      j = json.loads(r.read())
+                  h = j.get('html','')
+                  text = re.sub('<[^<]+?>',' ', h)
+                  return html.unescape(re.sub(r'\s+',' ', text)).strip()
+              except Exception:
+                  return ''
+
+          links = arg_links          # Dify 注入的输入变量
+          cookies = arg_youtube_cookies_path
+
+          records = []
+          for u in (links if isinstance(links, list) else [links]):
+              host = urlparse(u).netloc.lower()
+              rec = {'url': u, 'platform': 'web', 'title': '', 'body': '', 'method': 'none', 'ok': False}
+
+              if 'youtu' in host:
+                  rec['platform'] = 'youtube'
+                  vid = video_id(u)
+                  if vid:
+                      body, method = fetch_yt_transcript(vid, cookies)
+                      rec['body'] = body
+                      rec['method'] = method
+                      rec['title'] = f'YouTube {vid}'
+                      rec['ok'] = bool(body.strip())
+                  else:
+                      rec['method'] = 'video_id_missing'
+
+              elif 'x.com' in host or 'twitter.com' in host:
+                  rec['platform'] = 'x'
+                  body = fetch_twitter(u)
+                  rec['body'] = body
+                  rec['title'] = body[:70] + '...' if len(body) > 70 else body
+                  rec['method'] = 'oembed'
+                  rec['ok'] = bool(body.strip())
+
+              elif 'weixin' in host or 'wemp.app' in host or 'mp.weixin' in host:
+                  rec['platform'] = 'weixin'
+                  # 尝试 wemp.app 镜像
+                  mirror = u.replace('mp.weixin.qq.com', 'wemp.app')
+                  title, desc = fetch_meta(mirror)
+                  rec['title'] = title
+                  rec['body'] = desc
+                  rec['method'] = 'wemp_mirror'
+                  rec['ok'] = bool(desc.strip())
+
+              elif 'xiaohongshu' in host or 'xhslink' in host:
+                  rec['platform'] = 'xiaohongshu'
+                  title, desc = fetch_meta(u)
+                  rec['title'] = title
+                  rec['body'] = desc
+                  rec['method'] = 'meta'
+                  rec['ok'] = bool(desc.strip())
+
+              else:
+                  title, desc = fetch_meta(u)
+                  rec['title'] = title
+                  rec['body'] = desc
+                  rec['method'] = 'meta'
+                  rec['ok'] = bool(desc.strip())
+
+              records.append(rec)
+
+          ok_records = [r for r in records if r['ok']]
+          need_supplement = [r for r in records if not r['ok']]
+
+          combined_text = '\n\n'.join(
+              f"[{r['platform']}] {r['title']}\n{r['body']}"
+              for r in ok_records
+          )
+
+          return {
+              'combined_text': combined_text,
+              'has_content': bool(combined_text.strip()),
+              'need_supplement_json': json.dumps(need_supplement, ensure_ascii=False),
+              'ok_count': len(ok_records),
+              'total_count': len(records),
+          }
+        inputs:
+          - name: arg_links
+            value: "{{#start.links#}}"
+          - name: arg_youtube_cookies_path
+            value: "{{#start.youtube_cookies_path#}}"
+        outputs:
+          - name: combined_text
+            type: string
+          - name: has_content
+            type: boolean
+          - name: need_supplement_json
+            type: string
+          - name: ok_count
+            type: number
+          - name: total_count
+            type: number
+
+    # ── Step 2: 有内容 → LLM 总结；无内容 → 生成补料清单 ────────────────────────
+    - id: check_has_content
+      type: if-else
+      data:
+        title: 有抓取到内容？
+        conditions:
+          - variable: "{{#fetch_content.has_content#}}"
+            operator: is
+            value: "true"
+        true_branch: summarize_llm
+        false_branch: fallback_no_content
+
+    # ── Step 3a: LLM 提炼笔记 ───────────────────────────────────────────────────
+    - id: summarize_llm
       type: llm
       data:
+        title: LLM 提炼结构化笔记
         model:
-          provider: openai
+          provider: openai          # 可改为 anthropic 并使用 claude-haiku-4-5-20251001
           name: gpt-4o-mini
+          mode: chat
+          completion_params:
+            temperature: 0.3
+            max_tokens: 1200
         prompt_template:
           - role: system
             text: |
-              你是内容研究助手。根据输入链接对应的抓取文本，输出固定结构：
-              1) 核心主张（1句话）
-              2) 支撑论点（<=3）
-              3) 中文金句（1条）
-              4) 英文表达（1条）
-              5) 标签（<=3）
-              若信息不足，输出“补料清单”。
+              你是内容研究助手，从原始文本中提炼结构化笔记大纲。
+              严格按以下格式输出，不加任何额外说明：
+
+              **核心主张**（1句话）
+              [内容]
+
+              **支撑论点**（最多3条）
+              - [论点1]
+              - [论点2]
+              - [论点3]
+
+              **中文金句**
+              [1条可直接引用的中文表达]
+
+              **English Quote**
+              [1条可直接引用的英文表达]
+
+              **标签**
+              [tag1, tag2, tag3]
+
+              若某项内容不足，写"（待补料）"。
           - role: user
             text: |
-              links: {{#start.links#}}
-              language: {{#start.language#}}
+              语言偏好：{{#start.language#}}
+              成功抓取：{{#fetch_content.ok_count#}} / {{#fetch_content.total_count#}} 条
+
+              ===== 抓取内容 =====
+              {{#fetch_content.combined_text#}}
+              ====================
+
+              请输出结构化笔记大纲。
+
+    # ── Step 3b: 无内容时的补料清单 ─────────────────────────────────────────────
+    - id: fallback_no_content
+      type: template-transform
+      data:
+        title: 生成补料清单
+        template: |
+          **所有链接抓取失败，需要手动补充**
+
+          **补料清单**
+          {{#fetch_content.need_supplement_json#}}
+
+          请提供以下任意一项：
+          - 复制正文内容粘贴后重新提交
+          - YouTube：导出音频文件后转录
+          - 小红书/公众号：截图或正文粘贴
+
+    # ── Step 4: 汇总输出 ─────────────────────────────────────────────────────────
     - id: end
       type: end
       data:
         outputs:
           - name: outline
-            value: "{{#summarize.text#}}"
+            value: "{{#summarize_llm.text#}}"
+          - name: supplement_needed
+            value: "{{#fallback_no_content.output#}}"
+          - name: ok_count
+            value: "{{#fetch_content.ok_count#}}"
+          - name: total_count
+            value: "{{#fetch_content.total_count#}}"
+
   edges:
     - source: start
-      target: summarize
-    - source: summarize
+      target: fetch_content
+    - source: fetch_content
+      target: check_has_content
+    - source: check_has_content
+      target: summarize_llm
+      branch: true
+    - source: check_has_content
+      target: fallback_no_content
+      branch: false
+    - source: summarize_llm
+      target: end
+    - source: fallback_no_content
       target: end

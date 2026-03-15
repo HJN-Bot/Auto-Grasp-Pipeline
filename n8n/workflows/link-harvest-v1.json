@@ -26,7 +26,7 @@
     },
     {
       "parameters": {
-        "functionCode": "// 将 links 写入临时 JSON 文件，避免将用户输入拼接进 shell 命令（防注入）\nconst fs = require('fs');\nconst path = require('path');\n\nconst links = $json.links;\nconst language = $json.language;\nconst tmpFile = path.join('/tmp', `harvest_${Date.now()}.json`);\n\nfs.writeFileSync(tmpFile, JSON.stringify({ links, language }), 'utf8');\n\nreturn [{ json: { tmpFile, language } }];"
+        "functionCode": "const fs = require('fs');\nconst path = require('path');\nconst links = $json.links;\nconst language = $json.language;\nconst tmpFile = path.join('/tmp', `harvest_${Date.now()}.json`);\nfs.writeFileSync(tmpFile, JSON.stringify({ links, language }), 'utf8');\nreturn [{ json: { tmpFile, language } }];"
       },
       "id": "Function_WriteLinks",
       "name": "Write Links File",
@@ -36,30 +36,85 @@
     },
     {
       "parameters": {
-        "command": "python3 \"$COLLECT_NOTES_SCRIPT\" --links-file \"{{$json.tmpFile}}\" --out \"$NOTES_OUT_DIR/notes_$(date +%Y%m%d_%H%M%S).md\""
+        "command": "python3 \"$COLLECT_NOTES_SCRIPT\" --links-file \"{{$json.tmpFile}}\" --format json"
       },
       "id": "Exec_Collect",
       "name": "Run collect_notes.py",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [980, 300]
+      "position": [960, 300]
     },
     {
       "parameters": {
-        "functionCode": "return [{ json: { ok: true, message: 'Collection done', stdout: $json.stdout || '', stderr: $json.stderr || '' } }];"
+        "functionCode": "const stdout = ($json.stdout || '').trim();\nlet parsed;\ntry {\n  const lastLine = stdout.split('\\n').filter(l => l.trim()).pop() || '{}';\n  parsed = JSON.parse(lastLine);\n} catch(e) {\n  throw new Error('Script output parse failed: ' + stdout.slice(0, 300));\n}\nif (!parsed.ok) throw new Error('Script error: ' + JSON.stringify(parsed));\nreturn [{ json: {\n  ok: true,\n  records: parsed.records || [],\n  outlines: parsed.outlines || [],\n  need_materials: parsed.need_materials || [],\n  combined_text: parsed.combined_text || '',\n  platforms: (parsed.platforms || []).join(','),\n} }];"
+      },
+      "id": "Function_ParseOutput",
+      "name": "Parse Output",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$env.OPENCLAW_WEBHOOK_URL}}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "IF_Openclaw",
+      "name": "Openclaw 已配置？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.OPENCLAW_WEBHOOK_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={\n  \"records\": {{JSON.stringify($json.records)}},\n  \"outlines\": {{JSON.stringify($json.outlines)}},\n  \"need_materials\": {{JSON.stringify($json.need_materials)}},\n  \"source\": \"n8n-auto-harvest\"\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "HTTP_Openclaw",
+      "name": "Forward to Openclaw",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1680, 180]
+    },
+    {
+      "parameters": {
+        "functionCode": "return [{ json: { ok: $json.ok, records: $json.records, outlines: $json.outlines, need_materials: $json.need_materials } }];"
       },
       "id": "Function_Response",
       "name": "Response",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [1240, 300]
+      "position": [1680, 420]
     }
   ],
   "connections": {
-    "Webhook":           { "main": [[{ "node": "Validate Input",    "type": "main", "index": 0 }]] },
-    "Validate Input":    { "main": [[{ "node": "Write Links File",  "type": "main", "index": 0 }]] },
-    "Write Links File":  { "main": [[{ "node": "Run collect_notes.py", "type": "main", "index": 0 }]] },
-    "Run collect_notes.py": { "main": [[{ "node": "Response",      "type": "main", "index": 0 }]] }
+    "Webhook":              { "main": [[{ "node": "Validate Input",       "type": "main", "index": 0 }]] },
+    "Validate Input":       { "main": [[{ "node": "Write Links File",     "type": "main", "index": 0 }]] },
+    "Write Links File":     { "main": [[{ "node": "Run collect_notes.py", "type": "main", "index": 0 }]] },
+    "Run collect_notes.py": { "main": [[{ "node": "Parse Output",         "type": "main", "index": 0 }]] },
+    "Parse Output":         { "main": [[{ "node": "Openclaw 已配置？",    "type": "main", "index": 0 }]] },
+    "Openclaw 已配置？": {
+      "main": [
+        [{ "node": "Forward to Openclaw", "type": "main", "index": 0 }],
+        [{ "node": "Response",            "type": "main", "index": 0 }]
+      ]
+    }
   },
   "active": false,
   "settings": {},
