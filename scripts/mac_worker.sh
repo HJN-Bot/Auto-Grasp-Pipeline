@@ -10,8 +10,8 @@
 
 set -euo pipefail
 
-QUEUE_URL="${N8N_CLOUD_URL:-http://54.169.36.2:5678}/webhook/yt-queue"
-DONE_URL="${N8N_CLOUD_URL:-http://54.169.36.2:5678}/webhook/yt-queue/done"
+QUEUE_URL="${QUEUE_GET_URL:-http://54.169.36.2:8080/api/yt-queue?token=oc_ingest_mOmwEGAyQTlxMKvw1VemodYo}"
+DONE_URL="${DONE_POST_URL:-http://54.169.36.2:8080/api/yt-queue/done?token=oc_ingest_mOmwEGAyQTlxMKvw1VemodYo}"
 PYTHON="${VENV_PYTHON:-/Library/Frameworks/Python.framework/Versions/3.11/bin/python3}"
 WHISPER_MODEL="${WHISPER_MODEL:-small}"
 POLL_INTERVAL=30
