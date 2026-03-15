@@ -27,26 +27,31 @@ def video_id_from_url(url: str):
 
 def get_youtube_transcript(vid: str, cookies_file: str = ''):
     """
-    用 youtube-transcript-api 拉字幕。
-    支持新版 (>=0.6, 实例化传 cookies) 和旧版 (类方法) 两种 API。
+    用 youtube-transcript-api 1.2.x 拉字幕。
+    1.2.x API: 实例化传 http_client（带 cookie 的 session），调用 fetch()。
     """
     code = f'''
-import json, sys
+import json, sys, requests, http.cookiejar
 vid = {vid!r}
 cookies = {cookies_file!r}
+LANGS = ["zh", "zh-Hans", "zh-CN", "zh-TW", "en"]
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
-    try:
-        # 新版 API (>=0.6): 实例化后调用，支持 cookies
-        kwargs = {{"cookies": cookies}} if cookies else {{}}
-        api = YouTubeTranscriptApi(**kwargs)
-        raw = api.get_transcript(vid, languages=["en", "zh-Hans", "zh-CN"])
-        # 统一转为 dict 列表
-        data = [dict(r) if hasattr(r, "items") else {{"text": r.text, "start": r.start, "duration": r.duration}} for r in raw]
-    except TypeError:
-        # 旧版 API (<0.6): 类方法，不支持 cookies
-        data = YouTubeTranscriptApi.get_transcript(vid, languages=["en", "zh-Hans", "zh-CN"])
+    session = requests.Session()
+    # 模拟真实浏览器 UA，降低服务器 IP 被识别为 bot 的概率
+    session.headers.update({{
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }})
+    if cookies:
+        cj = http.cookiejar.MozillaCookieJar(cookies)
+        cj.load(ignore_discard=True, ignore_expires=True)
+        session.cookies = cj
+    api = YouTubeTranscriptApi(http_client=session)
+    raw = api.fetch(vid, languages=LANGS)
+    data = [{{"text": s.text, "start": s.start, "duration": s.duration}} for s in raw.snippets]
     print(json.dumps({{"ok": True, "data": data}}, ensure_ascii=False))
 except Exception as e:
     print(json.dumps({{"ok": False, "err": type(e).__name__ + ": " + str(e)}}, ensure_ascii=False))
@@ -67,6 +72,9 @@ def yt_dlp_audio(url: str, out_wav: str, cookies_file: str = ''):
         cmd = ['yt-dlp', '-f', 'bestaudio', '--no-playlist']
         if cookies_file and Path(cookies_file).is_file():
             cmd += ['--cookies', cookies_file]
+        # iOS 客户端绕过服务器 IP bot 检测（云端部署必须）
+        cmd += ['--extractor-args', 'youtube:player_client=ios,mweb']
+        cmd += ['--user-agent', 'com.google.ios.youtube/19.16.3 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)']
         cmd += ['-o', f'{td}/audio.%(ext)s', url]
 
         p = subprocess.run(cmd, capture_output=True, text=True)
