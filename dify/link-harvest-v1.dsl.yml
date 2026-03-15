@@ -1,0 +1,49 @@
+app:
+  name: link-harvest-v1
+  mode: workflow
+  description: 多来源链接转结构化中英笔记大纲
+version: 0.1.0
+workflow:
+  inputs:
+    - name: links
+      type: array[string]
+      required: true
+    - name: language
+      type: string
+      required: false
+      default: zh+en
+  nodes:
+    - id: start
+      type: start
+      data: {}
+    - id: summarize
+      type: llm
+      data:
+        model:
+          provider: openai
+          name: gpt-4o-mini
+        prompt_template:
+          - role: system
+            text: |
+              你是内容研究助手。根据输入链接对应的抓取文本，输出固定结构：
+              1) 核心主张（1句话）
+              2) 支撑论点（<=3）
+              3) 中文金句（1条）
+              4) 英文表达（1条）
+              5) 标签（<=3）
+              若信息不足，输出“补料清单”。
+          - role: user
+            text: |
+              links: {{#start.links#}}
+              language: {{#start.language#}}
+    - id: end
+      type: end
+      data:
+        outputs:
+          - name: outline
+            value: "{{#summarize.text#}}"
+  edges:
+    - source: start
+      target: summarize
+    - source: summarize
+      target: end

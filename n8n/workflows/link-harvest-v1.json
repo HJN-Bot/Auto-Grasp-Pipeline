@@ -1,0 +1,56 @@
+{
+  "name": "content-link-harvest-v1",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "content-harvest",
+        "httpMethod": "POST",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "Webhook_1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $json.body || $json;\nconst links = body.links || [];\nif (!Array.isArray(links) || !links.length) throw new Error('links is required');\nreturn [{ json: { links, language: body.language || 'zh+en' } }];"
+      },
+      "id": "Function_Validate",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "command": "python3 {{$env.COLLECT_NOTES_SCRIPT}} {{$json.links.join(' ')}} --out {{$env.NOTES_OUT_DIR}}/notes_{{$now}}.md"
+      },
+      "id": "Exec_Collect",
+      "name": "Run collect_notes.py",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "return [{ json: { ok: true, message: 'Collection done', stdout: $json.stdout || '', stderr: $json.stderr || '' } }];"
+      },
+      "id": "Function_Response",
+      "name": "Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1020, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]] },
+    "Validate Input": { "main": [[{ "node": "Run collect_notes.py", "type": "main", "index": 0 }]] },
+    "Run collect_notes.py": { "main": [[{ "node": "Response", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
