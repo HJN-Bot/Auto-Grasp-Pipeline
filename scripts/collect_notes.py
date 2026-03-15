@@ -312,11 +312,26 @@ def main():
             provide = '复制正文 OR 截图'
             if r['platform'] == 'youtube':
                 provide = '导出音频文件 OR 视频文件 OR 提供可访问字幕'
+            # 判断具体失败原因（供 Dashboard 显示）
+            errors = r.get('errors', [])
+            if any('TranscriptsDisabled' in e or 'Sign in' in e or 'bot' in e.lower() for e in errors):
+                fail_reason = 'youtube_blocked'
+            elif any('transcript_api_fail' in e for e in errors):
+                fail_reason = 'transcript_unavailable'
+            elif any('yt-dlp_fail' in e for e in errors):
+                fail_reason = 'download_failed'
+            elif errors:
+                fail_reason = 'fetch_failed'
+            else:
+                fail_reason = 'content_empty'
+
             need_materials.append({
                 'source': r['url'],
                 'got': f"标题「{r.get('title', '(无)')}」",
                 'missing': '；'.join(missing) if missing else '正文内容',
                 'provide': provide,
+                'fail_reason': fail_reason,
+                'errors': errors[:3],  # 最多传 3 条错误日志
             })
 
     lines = ['# Collected Notes (auto)', '']
