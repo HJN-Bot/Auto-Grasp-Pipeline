@@ -1,0 +1,91 @@
+{
+  "name": "yt-queue-api",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "yt-queue",
+        "httpMethod": "GET",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "Webhook_GetQueue",
+      "name": "GET /yt-queue",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 200]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const fs = require('fs');\nconst QUEUE_FILE = '/home/ubuntu/yt_queue.json';\n\nlet jobs = [];\ntry {\n  const raw = fs.readFileSync(QUEUE_FILE, 'utf8');\n  const all = JSON.parse(raw);\n  // 只返回 pending 状态的任务\n  jobs = all.filter(j => j.status === 'pending');\n  // 标记为 processing\n  const updated = all.map(j =>\n    j.status === 'pending' ? { ...j, status: 'processing', picked_at: new Date().toISOString() } : j\n  );\n  fs.writeFileSync(QUEUE_FILE, JSON.stringify(updated, null, 2));\n} catch(e) {\n  // 队列文件不存在或为空，正常\n}\n\nreturn [{ json: { jobs } }];"
+      },
+      "id": "Code_ReadQueue",
+      "name": "Read Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 200]
+    },
+    {
+      "parameters": {
+        "path": "yt-queue/done",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "Webhook_Done",
+      "name": "POST /yt-queue/done",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 460]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const fs = require('fs');\nconst QUEUE_FILE = '/home/ubuntu/yt_queue.json';\nconst body = $input.first().json.body || $input.first().json;\n\nconst { job_id, run_id, url, ok, raw_text, chars, language, error } = body;\n\n// 从队列移除已完成任务\ntry {\n  const all = JSON.parse(fs.readFileSync(QUEUE_FILE, 'utf8'));\n  const updated = all.filter(j => j.job_id !== job_id);\n  fs.writeFileSync(QUEUE_FILE, JSON.stringify(updated, null, 2));\n} catch(e) {}\n\nif (!ok) {\n  return [{ json: { forwarded: false, reason: error || 'mac_failed' } }];\n}\n\n// 构建 openclaw handoff 格式\nconst items = [{\n  source_type: 'youtube',\n  source_url: url,\n  title: `YouTube (本地转录)`,\n  transcript: raw_text,\n  language: language || 'zh+en',\n  meta: { chars: chars || raw_text.length, method: 'mac_local_whisper' }\n}];\n\nreturn [{ json: { ok: true, run_id, items, need_materials: [], from_mac: true } }];"
+      },
+      "id": "Code_ProcessDone",
+      "name": "Process Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 460]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://54.169.36.2:8080/api/harvest/ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "x-webhook-token", "value": "oc_ingest_mOmwEGAyQTlxMKvw1VemodYo" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ ok: $json.ok, run_id: $json.run_id, items: $json.items, need_materials: $json.need_materials }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "HTTP_ForwardToOpenclaw",
+      "name": "Forward to Openclaw",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [720, 460]
+    }
+  ],
+  "connections": {
+    "GET /yt-queue": {
+      "main": [[{ "node": "Read Queue", "type": "main", "index": 0 }]]
+    },
+    "POST /yt-queue/done": {
+      "main": [[{ "node": "Process Result", "type": "main", "index": 0 }]]
+    },
+    "Process Result": {
+      "main": [[{ "node": "Forward to Openclaw", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {},
+  "id": "yt-queue-api-v1"
+}
