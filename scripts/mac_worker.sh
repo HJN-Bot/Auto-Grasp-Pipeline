@@ -14,6 +14,8 @@ PYTHON="${VENV_PYTHON:-/Library/Frameworks/Python.framework/Versions/3.11/bin/py
 WHISPER_MODEL="${WHISPER_MODEL:-small}"
 POLL_INTERVAL=30
 TMP_RESP=/tmp/mac_worker_resp.json
+# 确保 subprocess 能找到 yt-dlp / ffmpeg / deno
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 echo $$ > /tmp/mac_worker.pid
 echo "[mac_worker] 启动 PID=$$  $(date)"
