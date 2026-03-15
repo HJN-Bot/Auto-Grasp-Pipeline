@@ -11,7 +11,7 @@
 QUEUE_URL="${QUEUE_GET_URL:-http://54.169.36.2:8080/api/yt-queue?token=oc_ingest_mOmwEGAyQTlxMKvw1VemodYo}"
 DONE_URL="${DONE_POST_URL:-http://54.169.36.2:8080/api/yt-queue/done?token=oc_ingest_mOmwEGAyQTlxMKvw1VemodYo}"
 PYTHON="${VENV_PYTHON:-/Library/Frameworks/Python.framework/Versions/3.11/bin/python3}"
-WHISPER_MODEL="${WHISPER_MODEL:-small}"
+WHISPER_MODEL="${WHISPER_MODEL:-tiny}"
 POLL_INTERVAL=30
 TMP_RESP=/tmp/mac_worker_resp.json
 # 确保 subprocess 能找到 yt-dlp / ffmpeg / deno
@@ -70,8 +70,48 @@ for job in jobs:
     print(f"  处理: {url[:70]}  job_id={job_id}")
 
     try:
+        # ── 0. 优先用 youtube-transcript-api（本地 Mac IP 可用，秒级完成）──────
+        def try_transcript_api(url):
+            import re, http.cookiejar
+            from urllib.parse import urlparse, parse_qs
+            def vid_id(u):
+                if 'youtu.be/' in u: return u.split('youtu.be/')[-1].split('?')[0]
+                q = parse_qs(urlparse(u).query)
+                if 'v' in q: return q['v'][0]
+                m = re.search(r'shorts/([^?&/]+)', u)
+                return m.group(1) if m else None
+            vid = vid_id(url)
+            if not vid: return None
+            try:
+                import requests
+                from youtube_transcript_api import YouTubeTranscriptApi
+                session = requests.Session()
+                session.headers['User-Agent'] = 'Mozilla/5.0'
+                LANGS = ['zh', 'zh-Hans', 'zh-CN', 'zh-TW', 'en']
+                try:
+                    api = YouTubeTranscriptApi(http_client=session)
+                    raw = api.fetch(vid, languages=LANGS)
+                    return ' '.join(s.text.strip() for s in raw.snippets)
+                except TypeError:
+                    data = YouTubeTranscriptApi.get_transcript(vid, languages=LANGS)
+                    return ' '.join(t['text'] for t in data)
+            except Exception as e:
+                print(f"  transcript_api 失败: {e} → 改用 Whisper")
+                return None
+
+        transcript = try_transcript_api(url)
+        if transcript and len(transcript) > 100:
+            print(f"  ✓ transcript_api 成功 {len(transcript)} 字符，跳过下载")
+            result = post_json(done_url, {
+                "job_id": job_id, "run_id": run_id, "url": url,
+                "ok": True, "raw_text": transcript,
+                "chars": len(transcript), "language": "zh"
+            })
+            print(f"  → 回传结果: {result[:120]}")
+            continue
+
+        # ── 1. transcript_api 失败，走 yt-dlp + Whisper ────────────────────────
         with tempfile.TemporaryDirectory() as td:
-            # 1. yt-dlp 下载音频（优先 chrome cookies，兜底直连）
             audio_out = f"{td}/audio.%(ext)s"
             dl_cmds = [
                 ["yt-dlp", "-f", "bestaudio", "--no-playlist",
@@ -128,7 +168,7 @@ segs, info = model.transcribe({wav!r}, vad_filter=True)
 text = " ".join(s.text.strip() for s in segs)
 print(json.dumps({{"ok": True, "text": text, "lang": info.language}}))
 """
-            wp = subprocess.run([python, "-c", code], capture_output=True, text=True, timeout=600)
+            wp = subprocess.run([python, "-c", code], capture_output=True, text=True, timeout=1800)
             try:
                 wout = json.loads(wp.stdout.strip().splitlines()[-1])
             except Exception as e:
