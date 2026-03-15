@@ -7,6 +7,7 @@ import requests
 # --- 环境配置（通过 .env 或系统环境变量注入，不硬编码）---
 VENV_PY = os.environ.get('VENV_PYTHON', sys.executable)
 YOUTUBE_COOKIES = os.environ.get('YOUTUBE_COOKIES', '')  # cookies.txt 绝对路径
+HTTPS_PROXY = os.environ.get('HTTPS_PROXY', '')          # 住宅代理，格式：http://user:pass@host:port
 
 ZH_HINTS = ['的','了','是','在','和','与','我们','你','他','她','它','这','那']
 
@@ -25,15 +26,16 @@ def video_id_from_url(url: str):
     return m.group(1) if m else None
 
 
-def get_youtube_transcript(vid: str, cookies_file: str = ''):
+def get_youtube_transcript(vid: str, cookies_file: str = '', proxy: str = ''):
     """
     用 youtube-transcript-api 1.2.x 拉字幕。
-    1.2.x API: 实例化传 http_client（带 cookie 的 session），调用 fetch()。
+    1.2.x API: 实例化传 http_client（带 cookie + 代理的 session），调用 fetch()。
     """
     code = f'''
 import json, sys, requests, http.cookiejar
 vid = {vid!r}
 cookies = {cookies_file!r}
+proxy = {proxy!r}
 LANGS = ["zh", "zh-Hans", "zh-CN", "zh-TW", "en"]
 
 try:
@@ -46,6 +48,8 @@ try:
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }})
+    if proxy:
+        session.proxies = {{"http": proxy, "https": proxy}}
     if cookies:
         cj = http.cookiejar.MozillaCookieJar(cookies)
         cj.load(ignore_discard=True, ignore_expires=True)
@@ -75,17 +79,19 @@ except Exception as e:
     return None, out.get('err')
 
 
-def yt_dlp_audio(url: str, out_wav: str, cookies_file: str = ''):
+def yt_dlp_audio(url: str, out_wav: str, cookies_file: str = '', proxy: str = ''):
     """下载最优音频并转换为 16kHz 单声道 WAV，供 Whisper 使用。"""
     with tempfile.TemporaryDirectory() as td:
         base_cmd = ['yt-dlp', '-f', 'bestaudio', '--no-playlist', '--no-check-certificates']
         if cookies_file and Path(cookies_file).is_file():
             base_cmd += ['--cookies', cookies_file]
+        if proxy:
+            base_cmd += ['--proxy', proxy]
         base_cmd += ['-o', f'{td}/audio.%(ext)s']
 
         # 三层兜底：依次尝试不同客户端，云端 IP 绕过 bot 检测
         attempts = [
-            # 1. iOS 原生客户端（最有效绕过云端 IP 检测）
+            # 1. iOS 原生客户端（住宅代理 + iOS UA，最有效绕过云端 IP 检测）
             base_cmd + ['--extractor-args', 'youtube:player_client=ios',
                         '--user-agent', 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)'],
             # 2. TV embedded 客户端（不需要登录）
@@ -255,14 +261,14 @@ def main():
             rec['platform'] = 'youtube'
             vid = video_id_from_url(u)
             rec['title'] = f'YouTube video {vid or ""}'.strip()
-            tr, err = get_youtube_transcript(vid, cookies_file) if vid else (None, 'video_id_missing')
+            tr, err = get_youtube_transcript(vid, cookies_file, HTTPS_PROXY) if vid else (None, 'video_id_missing')
             if tr:
                 rec['body'] = ' '.join([x.get('text', '') for x in tr])
                 rec['method'] = 'transcript_api'
             else:
                 rec['errors'].append(f'transcript_api_fail: {err}')
                 wav = '/tmp/yt_fallback.wav'
-                ok, e = yt_dlp_audio(u, wav, cookies_file)
+                ok, e = yt_dlp_audio(u, wav, cookies_file, HTTPS_PROXY)
                 if ok:
                     wh, e2 = whisper_transcribe(wav)
                     if wh and wh.get('ok'):
