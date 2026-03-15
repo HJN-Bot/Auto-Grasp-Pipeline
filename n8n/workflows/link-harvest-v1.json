@@ -16,7 +16,7 @@
     },
     {
       "parameters": {
-        "functionCode": "const body = $json.body || $json;\nconst links = body.links || [];\nif (!Array.isArray(links) || !links.length) throw new Error('links is required');\nconst language = body.language || 'zh+en';\nreturn [{ json: { links, language } }];"
+        "functionCode": "const body = $json.body || $json;\nconst links = body.links || [];\nif (!Array.isArray(links) || !links.length) throw new Error('links is required');\nconst language = body.language || 'zh+en';\nconst raw_text = body.raw_text || '';\nreturn [{ json: { links, language, raw_text } }];"
       },
       "id": "Function_Validate",
       "name": "Validate Input",
@@ -26,33 +26,60 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.raw_text}}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "IF_RawText",
+      "name": "有 raw_text？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// raw_text 旁路：跳过抓取，直接按 openclaw handoff 格式构建\nconst links = $json.links || [];\nconst raw_text = $json.raw_text || '';\nconst url = links[0] || '';\nconst run_id = 'n8n-' + new Date().toISOString().slice(0,10) + '-' + Date.now().toString().slice(-4);\n\nlet source_type = 'web';\ntry {\n  const host = new URL(url).hostname.toLowerCase();\n  if (host.includes('youtu')) source_type = 'youtube';\n  else if (host.includes('x.com') || host.includes('twitter')) source_type = 'x';\n  else if (host.includes('xiaohongshu') || host.includes('xhslink')) source_type = 'xhs';\n  else if (host.includes('weixin') || host.includes('wemp')) source_type = 'wechat';\n} catch(e) {}\n\nconst item = {\n  source_type,\n  source_url: url,\n  title: `${source_type} (本地转录注入)`,\n  transcript: raw_text,\n  language: $json.language || 'zh+en',\n  meta: { chars: raw_text.length, method: 'manual_inject' }\n};\n\nreturn [{ json: {\n  ok: true,\n  run_id,\n  items: [item],\n  need_materials: raw_text.length < 300 ? [{ source_url: url, missing: '正文不足300字' }] : [],\n} }];"
+      },
+      "id": "Function_RawTextBypass",
+      "name": "Build from Raw Text",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [960, 160]
+    },
+    {
+      "parameters": {
         "functionCode": "const fs = require('fs');\nconst path = require('path');\nconst links = $json.links;\nconst language = $json.language;\nconst tmpFile = path.join('/tmp', `harvest_${Date.now()}.json`);\nfs.writeFileSync(tmpFile, JSON.stringify({ links, language }), 'utf8');\nreturn [{ json: { tmpFile, language } }];"
       },
       "id": "Function_WriteLinks",
       "name": "Write Links File",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [720, 300]
+      "position": [960, 440]
     },
     {
       "parameters": {
-        "command": "python3 \"$COLLECT_NOTES_SCRIPT\" --links-file \"{{$json.tmpFile}}\" --format json"
+        "command": "\"$VENV_PYTHON\" \"$COLLECT_NOTES_SCRIPT\" --links-file \"{{$json.tmpFile}}\" --format json"
       },
       "id": "Exec_Collect",
       "name": "Run collect_notes.py",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [960, 300]
+      "position": [1200, 440]
     },
     {
       "parameters": {
-        "functionCode": "const stdout = ($json.stdout || '').trim();\nlet parsed;\ntry {\n  const lastLine = stdout.split('\\n').filter(l => l.trim()).pop() || '{}';\n  parsed = JSON.parse(lastLine);\n} catch(e) {\n  throw new Error('Script output parse failed: ' + stdout.slice(0, 300));\n}\nif (!parsed.ok) throw new Error('Script error: ' + JSON.stringify(parsed));\nreturn [{ json: {\n  ok: true,\n  records: parsed.records || [],\n  outlines: parsed.outlines || [],\n  need_materials: parsed.need_materials || [],\n  combined_text: parsed.combined_text || '',\n  platforms: (parsed.platforms || []).join(','),\n} }];"
+        "functionCode": "const stdout = ($json.stdout || '').trim();\nlet parsed;\ntry {\n  const lastLine = stdout.split('\\n').filter(l => l.trim()).pop() || '{}';\n  parsed = JSON.parse(lastLine);\n} catch(e) {\n  throw new Error('Script output parse failed: ' + stdout.slice(0, 300));\n}\nif (!parsed.ok) throw new Error('Script error: ' + JSON.stringify(parsed));\n\n// 转换为 openclaw handoff 协议格式\nconst run_id = 'n8n-' + new Date().toISOString().slice(0,10) + '-' + Date.now().toString().slice(-4);\nconst items = (parsed.records || []).map(r => ({\n  source_type: r.platform === 'x' ? 'x' : r.platform === 'xiaohongshu' ? 'xhs' : r.platform,\n  source_url: r.url,\n  title: r.title || '',\n  transcript: r.body || '',\n  language: 'zh+en',\n  meta: { chars: (r.quality||{}).chars || 0, method: r.method || '' }\n})).filter(i => i.transcript);\n\nconst need_materials = (parsed.need_materials || []).map(m => ({\n  source_url: m.source || '',\n  got: m.got || '',\n  missing: m.missing || '',\n  provide: m.provide || ''\n}));\n\nreturn [{ json: { ok: true, run_id, items, need_materials } }];"
       },
       "id": "Function_ParseOutput",
       "name": "Parse Output",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [1200, 300]
+      "position": [1440, 440]
     },
     {
       "parameters": {
@@ -69,7 +96,7 @@
       "name": "Openclaw 已配置？",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [1440, 300]
+      "position": [1680, 300]
     },
     {
       "parameters": {
@@ -83,29 +110,36 @@
         },
         "sendBody": true,
         "bodyContentType": "json",
-        "jsonBody": "={\n  \"records\": {{JSON.stringify($json.records)}},\n  \"outlines\": {{JSON.stringify($json.outlines)}},\n  \"need_materials\": {{JSON.stringify($json.need_materials)}},\n  \"source\": \"n8n-auto-harvest\"\n}",
+        "jsonBody": "={\n  \"ok\": {{$json.ok}},\n  \"run_id\": {{JSON.stringify($json.run_id)}},\n  \"items\": {{JSON.stringify($json.items)}},\n  \"need_materials\": {{JSON.stringify($json.need_materials)}}\n}",
         "options": { "timeout": 30000 }
       },
       "id": "HTTP_Openclaw",
       "name": "Forward to Openclaw",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [1680, 180]
+      "position": [1920, 160]
     },
     {
       "parameters": {
-        "functionCode": "return [{ json: { ok: $json.ok, records: $json.records, outlines: $json.outlines, need_materials: $json.need_materials } }];"
+        "functionCode": "return [{ json: { ok: $json.ok, run_id: $json.run_id, items: $json.items, need_materials: $json.need_materials } }];"
       },
       "id": "Function_Response",
       "name": "Response",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [1680, 420]
+      "position": [1920, 440]
     }
   ],
   "connections": {
-    "Webhook":              { "main": [[{ "node": "Validate Input",       "type": "main", "index": 0 }]] },
-    "Validate Input":       { "main": [[{ "node": "Write Links File",     "type": "main", "index": 0 }]] },
+    "Webhook":           { "main": [[{ "node": "Validate Input",    "type": "main", "index": 0 }]] },
+    "Validate Input":    { "main": [[{ "node": "有 raw_text？",     "type": "main", "index": 0 }]] },
+    "有 raw_text？": {
+      "main": [
+        [{ "node": "Build from Raw Text",    "type": "main", "index": 0 }],
+        [{ "node": "Write Links File",       "type": "main", "index": 0 }]
+      ]
+    },
+    "Build from Raw Text":  { "main": [[{ "node": "Openclaw 已配置？",    "type": "main", "index": 0 }]] },
     "Write Links File":     { "main": [[{ "node": "Run collect_notes.py", "type": "main", "index": 0 }]] },
     "Run collect_notes.py": { "main": [[{ "node": "Parse Output",         "type": "main", "index": 0 }]] },
     "Parse Output":         { "main": [[{ "node": "Openclaw 已配置？",    "type": "main", "index": 0 }]] },
