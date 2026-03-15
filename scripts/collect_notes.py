@@ -38,8 +38,9 @@ LANGS = ["zh", "zh-Hans", "zh-CN", "zh-TW", "en"]
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
+    import pkg_resources
+
     session = requests.Session()
-    # 模拟真实浏览器 UA，降低服务器 IP 被识别为 bot 的概率
     session.headers.update({{
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -49,9 +50,17 @@ try:
         cj = http.cookiejar.MozillaCookieJar(cookies)
         cj.load(ignore_discard=True, ignore_expires=True)
         session.cookies = cj
-    api = YouTubeTranscriptApi(http_client=session)
-    raw = api.fetch(vid, languages=LANGS)
-    data = [{{"text": s.text, "start": s.start, "duration": s.duration}} for s in raw.snippets]
+
+    data = None
+    # 新版 API (>=1.2.x): YouTubeTranscriptApi(http_client=session).fetch()
+    # 旧版 API (<0.6):    YouTubeTranscriptApi.get_transcript()（无 cookies 支持）
+    try:
+        api = YouTubeTranscriptApi(http_client=session)
+        raw = api.fetch(vid, languages=LANGS)
+        data = [{{"text": s.text, "start": s.start, "duration": s.duration}} for s in raw.snippets]
+    except TypeError:
+        data = YouTubeTranscriptApi.get_transcript(vid, languages=LANGS)
+
     print(json.dumps({{"ok": True, "data": data}}, ensure_ascii=False))
 except Exception as e:
     print(json.dumps({{"ok": False, "err": type(e).__name__ + ": " + str(e)}}, ensure_ascii=False))
@@ -69,15 +78,28 @@ except Exception as e:
 def yt_dlp_audio(url: str, out_wav: str, cookies_file: str = ''):
     """下载最优音频并转换为 16kHz 单声道 WAV，供 Whisper 使用。"""
     with tempfile.TemporaryDirectory() as td:
-        cmd = ['yt-dlp', '-f', 'bestaudio', '--no-playlist']
+        base_cmd = ['yt-dlp', '-f', 'bestaudio', '--no-playlist', '--no-check-certificates']
         if cookies_file and Path(cookies_file).is_file():
-            cmd += ['--cookies', cookies_file]
-        # iOS 客户端绕过服务器 IP bot 检测（云端部署必须）
-        cmd += ['--extractor-args', 'youtube:player_client=ios,mweb']
-        cmd += ['--user-agent', 'com.google.ios.youtube/19.16.3 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)']
-        cmd += ['-o', f'{td}/audio.%(ext)s', url]
+            base_cmd += ['--cookies', cookies_file]
+        base_cmd += ['-o', f'{td}/audio.%(ext)s']
 
-        p = subprocess.run(cmd, capture_output=True, text=True)
+        # 三层兜底：依次尝试不同客户端，云端 IP 绕过 bot 检测
+        attempts = [
+            # 1. iOS 原生客户端（最有效绕过云端 IP 检测）
+            base_cmd + ['--extractor-args', 'youtube:player_client=ios',
+                        '--user-agent', 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)'],
+            # 2. TV embedded 客户端（不需要登录）
+            base_cmd + ['--extractor-args', 'youtube:player_client=tv_embedded'],
+            # 3. 默认客户端（最后兜底）
+            base_cmd,
+        ]
+
+        p = None
+        for attempt_cmd in attempts:
+            p = subprocess.run(attempt_cmd + [url], capture_output=True, text=True)
+            if p.returncode == 0:
+                break
+
         if p.returncode != 0:
             return False, (p.stderr or p.stdout)[-700:]
         files = list(Path(td).glob('audio.*'))
