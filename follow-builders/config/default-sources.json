@@ -1,0 +1,56 @@
+{
+  "podcasts": [
+    {
+      "name": "Latent Space",
+      "type": "youtube_channel",
+      "url": "https://www.youtube.com/@LatentSpacePod",
+      "channelHandle": "LatentSpacePod"
+    },
+    {
+      "name": "Training Data",
+      "type": "youtube_playlist",
+      "url": "https://www.youtube.com/playlist?list=PLOhHNjZItNnMm5tdW61JpnyxeYH5NDDx8",
+      "playlistId": "PLOhHNjZItNnMm5tdW61JpnyxeYH5NDDx8"
+    },
+    {
+      "name": "No Priors",
+      "type": "youtube_channel",
+      "url": "https://www.youtube.com/@NoPriorsPodcast",
+      "channelHandle": "NoPriorsPodcast"
+    },
+    {
+      "name": "Unsupervised Learning",
+      "type": "youtube_channel",
+      "url": "https://www.youtube.com/@RedpointAI",
+      "channelHandle": "RedpointAI"
+    },
+    {
+      "name": "Data Driven NYC",
+      "type": "youtube_channel",
+      "url": "https://www.youtube.com/@DataDrivenNYC/videos",
+      "channelHandle": "DataDrivenNYC"
+    }
+  ],
+  "x_accounts": [
+    { "name": "Andrej Karpathy", "handle": "karpathy" },
+    { "name": "OpenAI", "handle": "OpenAI" },
+    { "name": "AnthropicAI", "handle": "AnthropicAI" },
+    { "name": "Claude", "handle": "claudeai" },
+    { "name": "Google DeepMind", "handle": "GoogleDeepMind" },
+    { "name": "Gemini App", "handle": "GeminiApp" },
+    { "name": "Sam Altman", "handle": "sama" },
+    { "name": "Demis Hassabis", "handle": "demishassabis" },
+    { "name": "Pieter Levels", "handle": "levelsio" },
+    { "name": "Nat Friedman", "handle": "natfriedman" },
+    { "name": "Garry Tan", "handle": "garrytan" },
+    { "name": "Amjad Masad", "handle": "amasad" },
+    { "name": "Simon Willison", "handle": "simonw" },
+    { "name": "OpenClaw", "handle": "openclaw" },
+    { "name": "Thariq", "handle": "trq212" },
+    { "name": "宝玉", "handle": "dotey" },
+    { "name": "泊舟", "handle": "bozhou_ai" },
+    { "name": "WaytoAGI", "handle": "WaytoAGI" },
+    { "name": "Red_Xiao_", "handle": "Red_Xiao_" },
+    { "name": "manateelazycat", "handle": "manateelazycat" }
+  ]
+}

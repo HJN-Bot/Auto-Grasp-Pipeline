@@ -1,0 +1,32 @@
+{
+  "source": "jianan_curated_v2",
+  "count": 20,
+  "updated_at": "2026-03-22",
+  "handles": [
+    "karpathy",
+    "OpenAI",
+    "AnthropicAI",
+    "claudeai",
+    "GoogleDeepMind",
+    "GeminiApp",
+    "sama",
+    "demishassabis",
+    "levelsio",
+    "natfriedman",
+    "garrytan",
+    "amasad",
+    "simonw",
+    "openclaw",
+    "trq212",
+    "dotey",
+    "bozhou_ai",
+    "WaytoAGI",
+    "Red_Xiao_",
+    "manateelazycat"
+  ],
+  "categories": {
+    "ai_core": ["karpathy", "OpenAI", "AnthropicAI", "claudeai", "GoogleDeepMind", "GeminiApp", "sama", "demishassabis"],
+    "builder_startup": ["levelsio", "natfriedman", "garrytan", "amasad", "simonw", "openclaw", "trq212"],
+    "chinese_kol": ["dotey", "bozhou_ai", "WaytoAGI", "Red_Xiao_", "manateelazycat"]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "generatedAt": "2026-03-22T09:00:00.000Z",
+  "lookbackHours": 24,
+  "x": [],
+  "stats": { "xBuilders": 0, "totalTweets": 0 },
+  "note": "This is a placeholder. Run 'npm run generate-feed' to populate with real data."
+}

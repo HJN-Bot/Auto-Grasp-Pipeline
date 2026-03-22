@@ -1,0 +1,5 @@
+{
+  "seenTweets": {},
+  "seenVideos": {},
+  "note": "Tracks already-processed content to avoid duplicates. Updated automatically by generate-feed.js"
+}
