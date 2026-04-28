@@ -67,3 +67,15 @@ python3 scripts/local_harvest.py --config examples/local-harvest.config.json --e
 ```
 
 来源优先级应偏向一手、高质量材料：官方文档、项目博客、标准/规范、原始仓库、作者本人 feed。`priority_domains` 用于按可信域名排序，`rss_feeds[].priority` 用于提升整条高信号 feed；所有来源最终仍按规范化 URL 去重。
+
+### 正文清洗与状态闭环
+
+- HTML 正文抽取优先尝试 `trafilatura`（如已安装），未安装时自动降级到内置 `html_to_text`，确保零依赖可跑。
+- 每次运行会生成 `output/source-state.json`，为每条来源记录 `inbox / extracted / selected / synthesized / published` 状态、`run_id`、质量分、token 与错误信息。
+- `run_daily_pipeline.py` 的 JSON 输出会包含 `run_id` 与 `state_manifest`，方便后续写回 Airtable/Dashboard 或 Feishu 页面证据区。
+
+可选安装更强正文抽取器：
+
+```bash
+python3 -m pip install trafilatura
+```

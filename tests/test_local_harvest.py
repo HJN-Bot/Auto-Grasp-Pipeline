@@ -146,6 +146,11 @@ class LocalHarvestTests(unittest.TestCase):
             self.assertIn("# Local Source Digest", digest)
             self.assertIn("Fixture Page", digest)
             self.assertIn("X/Twitter post 9", digest)
+            self.assertIn("run_id", report)
+            state = json.loads(Path(report["state_manifest"]).read_text(encoding="utf-8"))
+            self.assertEqual(state["schema"], "content-link-harvest.source_state.v1")
+            statuses = {item["status"] for item in state["items"]}
+            self.assertIn("selected", statuses)
 
     def test_run_writes_digest_from_file_rss_feed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -166,6 +171,16 @@ class LocalHarvestTests(unittest.TestCase):
             digest = Path(report["digest"]).read_text(encoding="utf-8")
             self.assertIn("Deterministic Feed Item", digest)
             self.assertIn("https://example.com/articles/feed-item?b=1", digest)
+
+    def test_clean_html_body_removes_script_noise_without_optional_dependency(self):
+        raw = """
+        <html><head><script>var noisy = true;</script></head>
+        <body><nav>Navigation</nav><article><h1>Readable</h1><p>Useful body text.</p></article></body></html>
+        """
+        text, cleaner = local_harvest.clean_html_body(raw)
+        self.assertIn("Useful body text", text)
+        self.assertNotIn("var noisy", text)
+        self.assertIn(cleaner, {"html_to_text", "trafilatura"})
 
 
 if __name__ == "__main__":

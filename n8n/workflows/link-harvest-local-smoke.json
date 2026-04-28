@@ -1,0 +1,38 @@
+{
+  "name": "content-link-harvest-local-smoke",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "content-harvest-smoke",
+        "httpMethod": "POST",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "Webhook_Smoke",
+      "name": "Webhook Smoke",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst links = body.links || [];\nif (!Array.isArray(links) || links.length === 0) throw new Error('links is required');\nconst raw_text = body.raw_text || '';\nconst run_id = 'n8n-smoke-' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);\nconst items = links.map((url) => ({\n  source_type: url.includes('x.com') || url.includes('twitter') ? 'x' : 'web',\n  source_url: url,\n  title: 'Local smoke source',\n  transcript: raw_text,\n  language: body.language || 'zh+en',\n  meta: { chars: raw_text.length, method: 'local_smoke_raw_text' }\n}));\nreturn [{ json: { ok: true, run_id, items, need_materials: raw_text.length < 300 ? [{ source_url: links[0], missing: '正文不足300字' }] : [] } }];"
+      },
+      "id": "Code_Smoke_Response",
+      "name": "Build Smoke Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Smoke": {
+      "main": [[{"node": "Build Smoke Response", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {},
+  "id": "content-link-harvest-local-smoke-v1"
+}

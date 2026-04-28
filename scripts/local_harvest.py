@@ -9,6 +9,7 @@ This script is intentionally small and deterministic:
 - No paid APIs.
 """
 import argparse
+import datetime as dt
 import hashlib
 import html
 import json
@@ -30,6 +31,7 @@ URL_RE = re.compile(r"https?://[^\s<>'\")\]]+")
 TRACKING_PARAMS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref", "spm"}
 TRACKING_PREFIXES = ("utm_",)
 DEFAULT_USER_AGENT = "content-link-harvest-local/0.1"
+STATE_FILENAME = "source-state.json"
 
 
 @dataclass
@@ -117,6 +119,30 @@ def html_to_text(raw_html: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def clean_html_body(raw_html: str) -> Tuple[str, str]:
+    """Extract readable article text from HTML.
+
+    Uses trafilatura when available because it removes nav/sidebar/footer noise much
+    better than regex stripping. Falls back to the built-in conservative cleaner so
+    this script still works with zero extra dependencies.
+    """
+    try:
+        import trafilatura  # type: ignore
+
+        extracted = trafilatura.extract(
+            raw_html,
+            include_comments=False,
+            include_tables=False,
+            favor_precision=True,
+            output_format="txt",
+        )
+        if extracted and len(extracted.strip()) >= 120:
+            return extracted.strip(), "trafilatura"
+    except Exception:
+        pass
+    return html_to_text(raw_html), "html_to_text"
+
+
 def meta_content(raw_html: str, names: Iterable[str]) -> str:
     for name in names:
         patterns = [
@@ -164,12 +190,14 @@ def fetch_url(url: str, cache_dir: Path, timeout: int, refresh: bool = False) ->
     if "<html" in raw[:500].lower() or "<title" in raw[:2000].lower():
         title = title_from_html(raw)
         desc = meta_content(raw, ["description", "og:description", "twitter:description"])
-        body = desc + "\n\n" + html_to_text(raw) if desc else html_to_text(raw)
+        cleaned, cleaner = clean_html_body(raw)
+        body = desc + "\n\n" + cleaned if desc and desc not in cleaned[:500] else cleaned
     else:
         title = ""
         body = raw.strip()
+        cleaner = "plain_text"
 
-    write_json(cache_path, {"url": url, "fetched_at": int(time.time()), "title": title, "text": body})
+    write_json(cache_path, {"url": url, "fetched_at": int(time.time()), "title": title, "text": body, "cleaner": cleaner})
     return body, title, "fetch"
 
 
@@ -514,6 +542,55 @@ def excerpt(text: str, token_limit: int) -> str:
     return clean[:char_limit].rsplit(" ", 1)[0].rstrip() + "..."
 
 
+def source_state_id(source: Source) -> str:
+    return hashlib.sha256(source.canonical_url.encode("utf-8")).hexdigest()[:16]
+
+
+def source_status(source: Source, selected: bool) -> str:
+    if source.errors or source.method in {"metadata_only", "fetch_failed"}:
+        return "inbox"
+    if selected:
+        return "selected"
+    if source.body:
+        return "extracted"
+    return "inbox"
+
+
+def write_state_manifest(output_dir: Path, selected: List[Source], skipped: List[Source], run_id: str) -> Path:
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    items = []
+    selected_ids = {source_state_id(source) for source in selected}
+    for source in selected + skipped:
+        sid = source_state_id(source)
+        items.append(
+            {
+                "id": sid,
+                "run_id": run_id,
+                "status": source_status(source, sid in selected_ids),
+                "canonical_url": source.canonical_url,
+                "title": source.title,
+                "source_type": source.source_type,
+                "method": source.method,
+                "quality_score": source.quality_score,
+                "approx_tokens": source.approx_tokens,
+                "selected_tokens": source.selected_tokens,
+                "errors": source.errors,
+                "metadata": source.metadata,
+                "last_seen_at": now,
+            }
+        )
+    manifest = {
+        "schema": "content-link-harvest.source_state.v1",
+        "run_id": run_id,
+        "updated_at": now,
+        "states": ["inbox", "extracted", "selected", "synthesized", "published"],
+        "items": items,
+    }
+    path = output_dir / STATE_FILENAME
+    write_json(path, manifest)
+    return path
+
+
 def render_markdown(config: Dict, selected: List[Source], skipped: List[Source], warnings: List[str]) -> str:
     token_budget = int(config.get("token_budget", 4000))
     total_candidate_tokens = sum(source.approx_tokens for source in selected + skipped)
@@ -543,6 +620,7 @@ def render_markdown(config: Dict, selected: List[Source], skipped: List[Source],
                 f"- URL: {source.canonical_url}",
                 f"- Type: {source.source_type}",
                 f"- Method: {source.method or '(none)'}",
+                f"- State: {source_status(source, True)}",
                 f"- Quality score: {source.quality_score}",
                 f"- Approx tokens used: {source.selected_tokens}",
             ]
@@ -601,6 +679,8 @@ def run(config_path: Path, output_dir: Optional[Path] = None, build_epub: bool =
         int(config.get("token_budget", 4000)),
         int(config.get("per_source_token_limit", 900)),
     )
+    run_id = dt.datetime.now(dt.timezone.utc).strftime("local-%Y%m%dT%H%M%SZ")
+    state_path = write_state_manifest(output_dir, selected, skipped, run_id)
     markdown = render_markdown(config, selected, skipped, warnings)
     digest_path = output_dir / str(config.get("digest_filename", "local-source-digest.md"))
     digest_path.write_text(markdown, encoding="utf-8")
@@ -612,6 +692,8 @@ def run(config_path: Path, output_dir: Optional[Path] = None, build_epub: bool =
     report = {
         "ok": True,
         "digest": str(digest_path),
+        "run_id": run_id,
+        "state_manifest": str(state_path),
         "epub_status": epub_status,
         "candidate_sources": len(sources),
         "selected_sources": len(selected),
