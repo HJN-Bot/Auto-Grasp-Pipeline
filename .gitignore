@@ -18,3 +18,7 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Local harvest runtime artifacts
+.cache/
+output/
