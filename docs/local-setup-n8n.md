@@ -1,28 +1,22 @@
 # 本地部署 n8n（Mac）
 
-## 方案A：Docker（推荐）
-```bash
-docker run -it --rm \
-  --name n8n \
-  -p 5678:5678 \
-  -e N8N_HOST=localhost \
-  -e N8N_PORT=5678 \
-  -e WEBHOOK_URL=http://localhost:5678/ \
-  -v ~/.n8n:/home/node/.n8n \
-  n8nio/n8n
-```
+✅ 已安装：n8n 2.18.4（npm global）
 
-## 方案B：npm 直装
+## 启动
 ```bash
-npm install -g n8n
 n8n start
 ```
+访问：`http://localhost:5678`
 
 ## 导入工作流
 - 打开 `http://localhost:5678`
 - Import from file
 - 选择 `n8n/workflows/link-harvest-v1.json`
 
-## 必配变量
+## 与 Python 管线配合
+n8n 作为可选的 webhook 入口和定时调度。
+日常管线推荐直接用 Python：`python3 scripts/run_daily_pipeline.py`
+
+## 可选环境变量
 - `COLLECT_NOTES_SCRIPT`：`/absolute/path/to/scripts/collect_notes.py`
 - `NOTES_OUT_DIR`：`/absolute/path/to/output`
