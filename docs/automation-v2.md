@@ -39,9 +39,22 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy N8N_P
 
 ## Suggested Cadence
 
-- Daily: RSS + GitHub Stars digest, Feishu short page.
-- Weekly: concept synthesis + EPUB build.
-- Monthly: curated book chapter package.
+User preference: do not publish a Feishu/Dashboard update every day. Daily reading pressure is too high and wastes tokens/attention.
+
+- Passive collection: at most 2-3 times/week, local-only, no Feishu push by default.
+- Feishu readable digest: weekly by default, only if there are enough high-signal items.
+- Deep synthesis / Jianan Brain article: weekly or manual-triggered, not automatic daily.
+- Monthly: curated EPUB / chapter package.
+
+Recommended default cron shape:
+
+```text
+Tue/Fri morning: local harvest + source-state only
+Sunday evening: selected weekly Feishu digest + EPUB
+Manual trigger: immediate harvest/publish for important links Jianan sends
+```
+
+Token rule: no LLM call during passive collection. Only selected weekly synthesis may call MAE/cheap summary, and only on snippets already selected by the local manifest.
 
 ## MAE Hook
 

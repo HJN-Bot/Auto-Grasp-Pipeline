@@ -79,3 +79,13 @@ python3 scripts/local_harvest.py --config examples/local-harvest.config.json --e
 ```bash
 python3 -m pip install trafilatura
 ```
+
+### 自动触发节奏
+
+默认不要每天发布。推荐节奏：
+
+- 周二/周五：本地低 token 采集 + `source-state.json`，不主动推送。
+- 周日：精选后生成一版 Feishu digest / EPUB。
+- 用户临时发重要链接时：手动即时触发。
+
+原则：日常只做确定性抓取、去重、打分；只有周总结或明确深挖时才调用 MAE/LLM。
