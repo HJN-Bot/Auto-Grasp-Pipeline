@@ -27,6 +27,10 @@
 - `dify/link-harvest-v1.dsl.yml`：可导入 Dify DSL
 - `templates/outline_zh_en.md`：统一输出模板
 - `scripts/collect_notes.py`：本地抓取/降级脚本（可独立运行）
+- `scripts/local_harvest.py`：低 token 本地来源收集 + Markdown/EPUB 发布 MVP
+- `examples/local-harvest.config.json`：本地收集示例配置
+- `docs/local-harvest-mvp.md`：本地 MVP 使用说明
+- `docs/reference-projects.md`：可借鉴的开源项目与后续集成方向
 
 ## 快速开始（本地）
 1) 启动 n8n（见 docs）
@@ -47,3 +51,17 @@ curl -X POST http://localhost:5678/webhook/content-harvest \
 - 英文表达（1条）
 - 标签（3个）
 - 补料清单（若抓取不足）
+
+## 本地来源 Digest MVP
+
+无需外部付费 API，可直接用 JSON 配置收集高优先级来源、去重、缓存、报告 token 预算并输出 Markdown：
+
+```bash
+python3 scripts/local_harvest.py --config examples/local-harvest.config.json
+```
+
+如已安装 `pandoc`，可同时生成 EPUB；未安装时会写入 fallback 说明：
+
+```bash
+python3 scripts/local_harvest.py --config examples/local-harvest.config.json --epub
+```

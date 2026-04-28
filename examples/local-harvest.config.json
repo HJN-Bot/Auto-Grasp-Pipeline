@@ -1,0 +1,35 @@
+{
+  "links": [
+    "https://github.com/openai/openai-python",
+    "https://x.com/example/status/1234567890"
+  ],
+  "input_files": [
+    "sample-links.md"
+  ],
+  "manual_text": {
+    "https://x.com/example/status/1234567890": "Paste the tweet or thread text here when X extraction is blocked."
+  },
+  "manual_sources": [
+    {
+      "url": "https://example.com/manual-source",
+      "note": "Optional extra source tracked in config."
+    }
+  ],
+  "priority_domains": [
+    "github.com",
+    "docs.python.org",
+    "openai.com",
+    "example.com"
+  ],
+  "github_stars": {
+    "enabled": true,
+    "limit": 25
+  },
+  "token_budget": 4000,
+  "per_source_token_limit": 900,
+  "fetch_timeout_seconds": 12,
+  "cache_dir": "../.cache/local_harvest",
+  "output_dir": "../output",
+  "digest_filename": "local-source-digest.md",
+  "build_epub": false
+}
