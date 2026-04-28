@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Local Fixture Feed</title>
+    <item>
+      <title>Deterministic Feed Item</title>
+      <link>https://example.com/articles/feed-item?utm_source=rss&amp;b=1</link>
+      <pubDate>Tue, 28 Apr 2026 10:00:00 +0000</pubDate>
+      <description><![CDATA[<p>A useful feed summary with enough detail for ranking.</p>]]></description>
+    </item>
+    <item>
+      <title>Duplicate Feed Item</title>
+      <link>https://example.com/articles/feed-item?b=1</link>
+      <description>Duplicate URL after normalization.</description>
+    </item>
+    <item>
+      <title>Second Feed Item</title>
+      <link>https://docs.python.org/3/library/xml.etree.elementtree.html</link>
+      <description>Standard library XML parsing reference.</description>
+    </item>
+  </channel>
+</rss>

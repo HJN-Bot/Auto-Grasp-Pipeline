@@ -78,6 +78,47 @@ class LocalHarvestTests(unittest.TestCase):
         self.assertEqual(sources[0].title, "acme/tool")
         self.assertIn("Useful local tool", sources[0].body)
 
+    def test_rss_feed_sources_use_cache_and_normalized_dedupe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = Path(__file__).parent / "fixtures" / "sample-feed.xml"
+            config = {
+                "rss_feeds": [{"url": fixture.as_uri(), "limit": 5, "priority": 7}],
+                "priority_domains": [],
+                "github_stars": {"enabled": False},
+                "cache_dir": str(root / "cache"),
+            }
+            sources, warnings = local_harvest.collect_sources(config, root / "config.json")
+            self.assertEqual(warnings, [])
+            self.assertEqual(len(sources), 2)
+            canonical_urls = {source.canonical_url for source in sources}
+            self.assertIn("https://example.com/articles/feed-item?b=1", canonical_urls)
+            feed_item = next(source for source in sources if source.title == "Deterministic Feed Item")
+            self.assertEqual(feed_item.priority, 7)
+            self.assertEqual(feed_item.method, "feed_fetch")
+            self.assertEqual(feed_item.metadata["feed_title"], "Local Fixture Feed")
+
+            cached_sources, cached_warnings = local_harvest.collect_sources(config, root / "config.json")
+            self.assertEqual(cached_warnings, [])
+            self.assertTrue(all(source.method == "feed_cache" for source in cached_sources))
+
+    def test_parse_atom_feed_sources(self):
+        raw_xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Atom Fixture</title>
+          <entry>
+            <title>Atom Item</title>
+            <link href="https://example.com/atom-item?utm_campaign=test" rel="alternate" />
+            <updated>2026-04-28T10:00:00Z</updated>
+            <summary>Atom summary text.</summary>
+          </entry>
+        </feed>"""
+        sources = local_harvest.parse_feed_sources("file:///tmp/atom.xml", raw_xml, 10, 5, "feed_fetch")
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].canonical_url, "https://example.com/atom-item")
+        self.assertEqual(sources[0].title, "Atom Item")
+        self.assertEqual(sources[0].metadata["feed_title"], "Atom Fixture")
+
     def test_run_writes_digest_from_file_url_without_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -105,6 +146,26 @@ class LocalHarvestTests(unittest.TestCase):
             self.assertIn("# Local Source Digest", digest)
             self.assertIn("Fixture Page", digest)
             self.assertIn("X/Twitter post 9", digest)
+
+    def test_run_writes_digest_from_file_rss_feed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = Path(__file__).parent / "fixtures" / "sample-feed.xml"
+            config = {
+                "rss_feeds": [{"url": fixture.as_uri(), "limit": 2, "priority": 6}],
+                "priority_domains": ["docs.python.org"],
+                "github_stars": {"enabled": False},
+                "token_budget": 500,
+                "per_source_token_limit": 250,
+                "cache_dir": str(root / "cache"),
+                "output_dir": str(root / "out"),
+            }
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            report = local_harvest.run(config_path)
+            digest = Path(report["digest"]).read_text(encoding="utf-8")
+            self.assertIn("Deterministic Feed Item", digest)
+            self.assertIn("https://example.com/articles/feed-item?b=1", digest)
 
 
 if __name__ == "__main__":

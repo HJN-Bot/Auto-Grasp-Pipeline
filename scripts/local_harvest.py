@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
@@ -172,6 +173,153 @@ def fetch_url(url: str, cache_dir: Path, timeout: int, refresh: bool = False) ->
     return body, title, "fetch"
 
 
+def fetch_feed_response(url: str, cache_dir: Path, timeout: int, refresh: bool = False) -> Tuple[str, str]:
+    key = cache_key(url)
+    cache_path = cache_dir / "feeds" / f"{key}.json"
+    if cache_path.exists() and not refresh:
+        cached = read_json(cache_path)
+        return cached.get("text", ""), "feed_cache"
+
+    parsed = urlparse(url)
+    if parsed.scheme == "file":
+        raw = Path(parsed.path).read_text(encoding="utf-8")
+    else:
+        request = Request(url, headers={"User-Agent": DEFAULT_USER_AGENT})
+        with urlopen(request, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            raw = response.read().decode(charset, errors="replace")
+
+    write_json(cache_path, {"url": url, "fetched_at": int(time.time()), "text": raw})
+    return raw, "feed_fetch"
+
+
+def xml_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1].lower()
+
+
+def first_child_text(parent: ET.Element, names: Iterable[str]) -> str:
+    wanted = {name.lower() for name in names}
+    for child in list(parent):
+        if xml_name(child.tag) in wanted:
+            text = "".join(child.itertext()).strip()
+            if text:
+                return html.unescape(text)
+    return ""
+
+
+def feed_title(root: ET.Element) -> str:
+    if xml_name(root.tag) == "feed":
+        return first_child_text(root, ["title"])
+    for child in list(root):
+        if xml_name(child.tag) == "channel":
+            return first_child_text(child, ["title"])
+    return ""
+
+
+def atom_entry_url(entry: ET.Element) -> str:
+    fallback = ""
+    for child in list(entry):
+        if xml_name(child.tag) != "link":
+            continue
+        href = child.attrib.get("href", "").strip()
+        if not href:
+            continue
+        rel = child.attrib.get("rel", "alternate").lower()
+        if rel == "alternate":
+            return href
+        if not fallback:
+            fallback = href
+    return fallback
+
+
+def rss_item_url(item: ET.Element) -> str:
+    link = first_child_text(item, ["link"])
+    if link:
+        return link
+    guid = first_child_text(item, ["guid"])
+    return guid if guid.startswith(("http://", "https://")) else ""
+
+
+def feed_item_body(item: ET.Element) -> str:
+    parts = [
+        first_child_text(item, ["description", "summary", "content", "encoded"]),
+        first_child_text(item, ["pubDate", "published", "updated"]),
+    ]
+    clean_parts = []
+    for part in parts:
+        if not part:
+            continue
+        clean = html_to_text(part) if "<" in part and ">" in part else re.sub(r"\s+", " ", part).strip()
+        if clean:
+            clean_parts.append(clean)
+    return "\n".join(clean_parts)
+
+
+def parse_feed_sources(feed_url: str, raw_xml: str, limit: int, priority: int, method: str) -> List[Source]:
+    root = ET.fromstring(raw_xml)
+    title = feed_title(root)
+    entries = list(root) if xml_name(root.tag) == "feed" else []
+    if xml_name(root.tag) != "feed":
+        entries = []
+        for child in list(root):
+            if xml_name(child.tag) == "channel":
+                entries = [item for item in list(child) if xml_name(item.tag) == "item"]
+                break
+        if not entries:
+            entries = [item for item in list(root) if xml_name(item.tag) == "item"]
+
+    sources: List[Source] = []
+    for entry in entries:
+        if len(sources) >= limit:
+            break
+        url = atom_entry_url(entry) if xml_name(root.tag) == "feed" else rss_item_url(entry)
+        if not url:
+            continue
+        item_title = first_child_text(entry, ["title"]) or url
+        published = first_child_text(entry, ["pubDate", "published", "updated"])
+        metadata = {"feed_url": feed_url}
+        if title:
+            metadata["feed_title"] = title
+        if published:
+            metadata["published"] = published
+        sources.append(
+            Source(
+                url=url,
+                canonical_url=normalize_url(url),
+                title=item_title,
+                body=feed_item_body(entry),
+                source_type="rss_feed",
+                method=method,
+                priority=priority,
+                metadata=metadata,
+            )
+        )
+    return sources
+
+
+def rss_feed_sources(config: Dict, base_dir: Path, cache_dir: Path, timeout: int, refresh: bool) -> Tuple[List[Source], List[str]]:
+    sources: List[Source] = []
+    warnings: List[str] = []
+    for idx, feed_cfg in enumerate(config.get("rss_feeds", []), 1):
+        if not isinstance(feed_cfg, dict) or not feed_cfg.get("url"):
+            warnings.append(f"rss_feed_skipped:{idx}: missing url")
+            continue
+        feed_url = str(feed_cfg["url"])
+        if "://" not in feed_url:
+            feed_path = (base_dir / feed_url).resolve()
+            feed_url = feed_path.as_uri()
+        try:
+            limit = int(feed_cfg.get("limit", 20))
+            priority = int(feed_cfg.get("priority", 0))
+            if limit <= 0:
+                continue
+            raw_xml, method = fetch_feed_response(feed_url, cache_dir, timeout, refresh)
+            sources.extend(parse_feed_sources(feed_url, raw_xml, limit, priority, method))
+        except (ET.ParseError, URLError, OSError, UnicodeError, ValueError) as exc:
+            warnings.append(f"rss_feed_failed:{feed_url}: {str(exc)[:200]}")
+    return sources, warnings
+
+
 def x_metadata_source(url: str, manual_text: str = "") -> Source:
     parsed = urlparse(url)
     post_id = ""
@@ -194,11 +342,11 @@ def x_metadata_source(url: str, manual_text: str = "") -> Source:
 
 
 def score_source(source: Source, priority_domains: List[str]) -> Source:
-    source.priority = priority_for(source.canonical_url, priority_domains)
+    source.priority = max(source.priority, priority_for(source.canonical_url, priority_domains))
     source.approx_tokens = approx_tokens("\n".join([source.title, source.body]))
     char_score = min(40, len(source.body) // 80)
     title_score = 8 if source.title else 0
-    method_score = 12 if source.method in {"fetch", "cache", "github_starred"} else 2
+    method_score = 12 if source.method in {"fetch", "cache", "github_starred", "feed_fetch", "feed_cache"} else 2
     priority_score = source.priority * 10
     penalty = 20 if source.errors else 0
     source.quality_score = max(0, priority_score + char_score + title_score + method_score - penalty)
@@ -328,6 +476,10 @@ def collect_sources(config: Dict, config_path: Path, runner: CommandRunner = def
         stars, star_warnings = github_starred_sources(int(gh_cfg.get("limit", 30)), runner)
         collected.extend(stars)
         warnings.extend(star_warnings)
+
+    feed_sources, feed_warnings = rss_feed_sources(config, base_dir, cache_dir, timeout, refresh)
+    collected.extend(feed_sources)
+    warnings.extend(feed_warnings)
 
     deduped: Dict[str, Source] = {}
     for source in collected:

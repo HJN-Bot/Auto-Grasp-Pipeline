@@ -15,6 +15,18 @@
       "note": "Optional extra source tracked in config."
     }
   ],
+  "rss_feeds": [
+    {
+      "url": "https://github.blog/feed/",
+      "limit": 10,
+      "priority": 4
+    },
+    {
+      "url": "https://blog.python.org/feeds/posts/default",
+      "limit": 5,
+      "priority": 3
+    }
+  ],
   "priority_domains": [
     "github.com",
     "docs.python.org",

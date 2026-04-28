@@ -54,7 +54,7 @@ curl -X POST http://localhost:5678/webhook/content-harvest \
 
 ## 本地来源 Digest MVP
 
-无需外部付费 API，可直接用 JSON 配置收集高优先级来源、去重、缓存、报告 token 预算并输出 Markdown：
+无需外部付费 API，可直接用 JSON 配置收集高优先级来源、RSS/Atom feed、去重、缓存、报告 token 预算并输出 Markdown：
 
 ```bash
 python3 scripts/local_harvest.py --config examples/local-harvest.config.json
@@ -65,3 +65,5 @@ python3 scripts/local_harvest.py --config examples/local-harvest.config.json
 ```bash
 python3 scripts/local_harvest.py --config examples/local-harvest.config.json --epub
 ```
+
+来源优先级应偏向一手、高质量材料：官方文档、项目博客、标准/规范、原始仓库、作者本人 feed。`priority_domains` 用于按可信域名排序，`rss_feeds[].priority` 用于提升整条高信号 feed；所有来源最终仍按规范化 URL 去重。
